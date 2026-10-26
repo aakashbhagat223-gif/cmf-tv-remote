@@ -78,8 +78,8 @@ jobs:
                   applicationId = "com.cmf.tvremote"
                   minSdk = 26
                   targetSdk = 34
-                  versionCode = 7
-                  versionName = "3.0.0"
+                  versionCode = 8
+                  versionName = "3.1.0"
               }
               compileOptions {
                   sourceCompatibility = JavaVersion.VERSION_17
@@ -163,7 +163,7 @@ jobs:
               DPAD_DOWN(20),
               DPAD_LEFT(21),
               DPAD_RIGHT(22),
-              SELECT(23), // KEYCODE_DPAD_CENTER
+              SELECT(23),
               BACK(4),
               HOME(3),
               ASSISTANT(219),
@@ -188,7 +188,7 @@ jobs:
           )
           """
 
-          # 8. Protocol Engine: KeyStore & mTLS Certificate Manager
+          # 8. Crypto: KeyStore & Hex Helpers
           files["app/src/main/java/com/cmf/tvremote/data/crypto/KeyStoreHelper.kt"] = """package com.cmf.tvremote.data.crypto
 
           import android.security.keystore.KeyGenParameterSpec
@@ -198,13 +198,24 @@ jobs:
           import java.security.KeyStore
           import java.security.SecureRandom
           import java.security.cert.X509Certificate
-          import java.security.interfaces.RSAPrivateKey
-          import java.security.interfaces.RSAPublicKey
           import javax.net.ssl.KeyManagerFactory
           import javax.net.ssl.SSLContext
           import javax.net.ssl.TrustManager
           import javax.net.ssl.X509TrustManager
           import javax.security.auth.x500.X500Principal
+
+          fun BigInteger.toRawHexBytes(): ByteArray {
+              var hex = this.toString(16)
+              if (hex.length % 2 != 0) hex = "0" + hex
+              val len = hex.length
+              val data = ByteArray(len / 2)
+              var i = 0
+              while (i < len) {
+                  data[i / 2] = ((Character.digit(hex[i], 16) shl 4) + Character.digit(hex[i + 1], 16)).toByte()
+                  i += 2
+              }
+              return data
+          }
 
           object KeyStoreHelper {
               private const val ALIAS = "cmf_google_tv_remote_key"
@@ -253,27 +264,14 @@ jobs:
                       init(kmf.keyManagers, arrayOf<TrustManager>(trustManager), SecureRandom())
                   }
               }
-
-              fun BigInteger.toRawHexBytes(): ByteArray {
-                  var hex = this.toString(16)
-                  if (hex.length % 2 != 0) hex = "0" + hex
-                  val len = hex.length
-                  val data = ByteArray(len / 2)
-                  var i = 0
-                  while (i < len) {
-                      data[i / 2] = ((Character.digit(hex[i], 16) shl 4) + Character.digit(hex[i + 1], 16)).toByte()
-                      i += 2
-                  }
-                  return data
-              }
           }
           """
 
-          # 9. Protocol Engine: Google TV Remote v2 (Pairing & Command Channel)
+          # 9. Protocol: Google TV Protocol Engine (Pairing & Command Channel)
           files["app/src/main/java/com/cmf/tvremote/data/network/GoogleTvProtocol.kt"] = """package com.cmf.tvremote.data.network
 
           import com.cmf.tvremote.data.crypto.KeyStoreHelper
-          import com.cmf.tvremote.data.crypto.KeyStoreHelper.toRawHexBytes
+          import com.cmf.tvremote.data.crypto.toRawHexBytes
           import com.cmf.tvremote.domain.model.RemoteCommand
           import kotlinx.coroutines.Dispatchers
           import kotlinx.coroutines.withContext
@@ -290,7 +288,6 @@ jobs:
               private var commandSocket: SSLSocket? = null
               private var commandOut: OutputStream? = null
 
-              // --- 1. PAIRING CHANNEL (Port 6467) ---
               suspend fun startPairing(tvIp: String): Result<PairingSession> = withContext(Dispatchers.IO) {
                   runCatching {
                       val sslContext = KeyStoreHelper.buildSslContext()
@@ -301,25 +298,18 @@ jobs:
                       val out = socket.outputStream
                       val inStream = socket.inputStream
 
-                      // Message 1: Client -> TV: PairingRequest (type = 10)
-                      // service_name: "androidtv-remote", client_name: "CMF Phone (2)"
                       val serviceNameBytes = "androidtv-remote".toByteArray()
                       val clientNameBytes = "CMF Phone (2)".toByteArray()
                       val pairingReqPayload = byteArrayOf(0x0a, serviceNameBytes.size.toByte()) + serviceNameBytes +
                               byteArrayOf(0x12, clientNameBytes.size.toByte()) + clientNameBytes
                       sendPoloMessage(out, 10, pairingReqPayload)
 
-                      // Message 2: TV -> Client: PairingRequestAck (type = 11)
                       readPoloMessage(inStream)
 
-                      // Message 3: Client -> TV: Configuration (type = 30)
-                      // Hexadecimal encoding (type=3, role=2, length=6), client_role=1
                       val configPayload = byteArrayOf(0x0a, 0x06, 0x08, 0x03, 0x10, 0x02, 0x18, 0x06, 0x10, 0x01)
                       sendPoloMessage(out, 30, configPayload)
 
-                      // Message 4: TV -> Client: ConfigurationAck (type = 31)
                       readPoloMessage(inStream)
-                      // At this point, the TV screen is displaying the 6-character hex PIN!
                       PairingSession(socket, inStream, out)
                   }
               }
@@ -347,7 +337,6 @@ jobs:
                           md.update(serverKey.modulus.toRawHexBytes())
                           md.update(serverKey.publicExponent.toRawHexBytes())
 
-                          // Convert last 4 hex characters to bytes
                           val last4Hex = cleanPin.substring(2)
                           val randomBytes = ByteArray(last4Hex.length / 2) { i ->
                               ((Character.digit(last4Hex[i * 2], 16) shl 4) + Character.digit(last4Hex[i * 2 + 1], 16)).toByte()
@@ -355,16 +344,13 @@ jobs:
                           md.update(randomBytes)
                           val hash = md.digest()
 
-                          // Validate check byte
                           val expectedCheck = cleanPin.substring(0, 2).toInt(16)
                           val actualCheck = hash[0].toInt() and 0xFF
                           require(expectedCheck == actualCheck) { "PIN checksum mismatch. Verify code on TV." }
 
-                          // Message 5: Client -> TV: Secret (type = 40)
                           val secretPayload = byteArrayOf(0x0a, 0x20) + hash
                           sendPoloMessage(out, 40, secretPayload)
 
-                          // Message 6: TV -> Client: SecretAck (type = 41)
                           val (ackType, _) = readPoloMessage(inStream)
                           require(ackType == 41) { "TV rejected pairing secret." }
 
@@ -390,7 +376,7 @@ jobs:
                   var i = 0
                   while (i < buf.size) {
                       val tag = buf[i].toInt() and 0xFF
-                      if (tag == 0x18) { // Field 3: type
+                      if (tag == 0x18) {
                           type = buf[i + 1].toInt() and 0xFF
                           break
                       }
@@ -399,7 +385,6 @@ jobs:
                   return Pair(type, buf)
               }
 
-              // --- 2. COMMAND CHANNEL (Port 6466) ---
               suspend fun connectCommandChannel(tvIp: String): Result<Unit> = withContext(Dispatchers.IO) {
                   runCatching {
                       disconnect()
@@ -409,9 +394,7 @@ jobs:
                       socket.startHandshake()
 
                       val out = socket.outputStream
-                      val inStream = socket.inputStream
 
-                      // Send RemoteConfigure client handshake response
                       val configureBytes = byteArrayOf(
                           0x24, 0x0a, 0x22, 0x08, 0xee.toByte(), 0x04, 0x12, 0x1d, 0x18, 0x01, 0x22, 0x01, 0x31,
                           0x2a, 0x0f, 0x61, 0x6e, 0x64, 0x72, 0x6f, 0x69, 0x74, 0x76, 0x2d, 0x72, 0x65, 0x6d, 0x6f, 0x74, 0x65,
@@ -428,8 +411,6 @@ jobs:
               suspend fun sendCommand(cmd: RemoteCommand): Result<Unit> = withContext(Dispatchers.IO) {
                   runCatching {
                       val out = commandOut ?: throw IllegalStateException("Not connected")
-                      // Wireframe packet: RemoteKeyInject (Field 14, wire type 2 = 0x72)
-                      // keyCode (field 1), direction = 3 (SHORT press, field 2)
                       val inject = byteArrayOf(0x08, cmd.keyCode.toByte(), 0x10, 0x03)
                       val packet = byteArrayOf(0x72, inject.size.toByte()) + inject
                       out.write(byteArrayOf(packet.size.toByte()) + packet)
@@ -448,7 +429,7 @@ jobs:
           }
           """
 
-          # 10. Settings Engine (DataStore)
+          # 10. Settings Engine
           files["app/src/main/java/com/cmf/tvremote/SettingsEngine.kt"] = """package com.cmf.tvremote
 
           import android.content.Context
@@ -542,7 +523,7 @@ jobs:
           }
           """
 
-          # 11. Components (Sharp Glassmorphic Optics, High-Contrast Controls)
+          # 11. Components (Sharp Frosted Glass Surfaces)
           files["app/src/main/java/com/cmf/tvremote/Components.kt"] = """package com.cmf.tvremote
 
           import androidx.compose.animation.core.animateFloatAsState
@@ -802,7 +783,7 @@ jobs:
           }
           """
 
-          # 12. Main Activity (Real Telemetry Hub, Pairing PIN Dialog, Live DPad)
+          # 12. Main Activity (Syntax-Checked Telemetry UI)
           files["app/src/main/java/com/cmf/tvremote/MainActivity.kt"] = """package com.cmf.tvremote
 
           import android.app.Application
@@ -819,6 +800,7 @@ jobs:
           import androidx.compose.foundation.layout.*
           import androidx.compose.foundation.rememberScrollState
           import androidx.compose.foundation.shape.CircleShape
+          import androidx.compose.foundation.shape.RoundedCornerShape
           import androidx.compose.foundation.verticalScroll
           import androidx.compose.material.icons.Icons
           import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -879,6 +861,27 @@ jobs:
                   }
               }
 
+              fun connectCommandChannel(ip: String) {
+                  viewModelScope.launch {
+                      _telemetry.value = _telemetry.value.copy(
+                          status = ConnectionStatus.CONNECTING,
+                          statusMessage = "Connecting to TV..."
+                      )
+                      val res = GoogleTvProtocol.connectCommandChannel(ip)
+                      if (res.isSuccess) {
+                          _telemetry.value = _telemetry.value.copy(
+                              status = ConnectionStatus.CONNECTED,
+                              statusMessage = "Connected to Google TV"
+                          )
+                      } else {
+                          _telemetry.value = _telemetry.value.copy(
+                              status = ConnectionStatus.DISCONNECTED,
+                              statusMessage = "Tap to pair or connect"
+                          )
+                      }
+                  }
+              }
+
               fun refreshNetworkInfo(targetIp: String) {
                   val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
                   val wm = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
@@ -886,11 +889,11 @@ jobs:
                   val cap = cm.getNetworkCapabilities(network)
 
                   val isWifi = cap?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true
-                  val ssid = if (isWifi) {
-                      val raw = wm.connectionInfo.ssid?.replace("\"", "") ?: "Connected"
-                      if (raw == "<unknown ssid>") "Home Wi-Fi" else raw
-                  } else "Disconnected"
-                  val speed = if (isWifi) "${wm.connectionInfo.linkSpeed} Mbps" else "0 Mbps"
+                  val rawSsid = wm.connectionInfo.ssid ?: "Home Wi-Fi"
+                  val quoteChar = 34.toChar().toString()
+                  val cleanSsid = rawSsid.replace(quoteChar, "")
+                  val ssid = if (!isWifi) "Disconnected" else if (cleanSsid.contains("unknown") || cleanSsid.isEmpty()) "Home Wi-Fi" else cleanSsid
+                  val speed = if (isWifi) wm.connectionInfo.linkSpeed.toString() + " Mbps" else "0 Mbps"
 
                   _telemetry.value = _telemetry.value.copy(
                       tvIp = targetIp,
@@ -919,13 +922,13 @@ jobs:
               }
 
               fun initiatePairing(ip: String) {
+                  val cleanIp = ip.trim()
                   viewModelScope.launch {
-                      val cleanIp = ip.trim()
                       settingsEngine.saveTvIp(cleanIp)
                       refreshNetworkInfo(cleanIp)
                       _telemetry.value = _telemetry.value.copy(
                           status = ConnectionStatus.PAIRING_REQUIRED,
-                          statusMessage = "Pairing with $cleanIp..."
+                          statusMessage = "Pairing with " + cleanIp + "..."
                       )
                       val res = GoogleTvProtocol.startPairing(cleanIp)
                       if (res.isSuccess) {
@@ -958,27 +961,6 @@ jobs:
                       } else {
                           _telemetry.value = _telemetry.value.copy(
                               statusMessage = res.exceptionOrNull()?.message ?: "Verification failed."
-                          )
-                      }
-                  }
-              }
-
-              fun connectCommandChannel(ip: String) {
-                  viewModelScope.launch {
-                      _telemetry.value = _telemetry.value.copy(
-                          status = ConnectionStatus.CONNECTING,
-                          statusMessage = "Connecting to TV..."
-                      )
-                      val res = GoogleTvProtocol.connectCommandChannel(ip)
-                      if (res.isSuccess) {
-                          _telemetry.value = _telemetry.value.copy(
-                              status = ConnectionStatus.CONNECTED,
-                              statusMessage = "Connected to Google TV"
-                          )
-                      } else {
-                          _telemetry.value = _telemetry.value.copy(
-                              status = ConnectionStatus.DISCONNECTED,
-                              statusMessage = "Tap to pair or connect"
                           )
                       }
                   }
@@ -1043,7 +1025,6 @@ jobs:
                                   .navigationBarsPadding(),
                               contentAlignment = Alignment.Center
                           ) {
-                              // Top Bar: Time and Settings Icon
                               Row(
                                   modifier = Modifier
                                       .fillMaxWidth()
@@ -1071,7 +1052,6 @@ jobs:
 
                               val cardShape = SquircleShape(cornerRadius = settings.cornerRadius)
 
-                              // Main Frosted Card Container
                               Column(
                                   modifier = Modifier
                                       .fillMaxWidth(0.92f)
@@ -1087,7 +1067,6 @@ jobs:
                                   horizontalAlignment = Alignment.CenterHorizontally,
                                   verticalArrangement = Arrangement.spacedBy(18.dp)
                               ) {
-                                  // TELEMETRY INFORMATION HUB (Replaced Interstellar)
                                   Column(
                                       modifier = Modifier
                                           .fillMaxWidth()
@@ -1103,14 +1082,13 @@ jobs:
                                       )
                                       Spacer(Modifier.height(4.dp))
                                       Text(
-                                          text = "IP: ${telemetry.tvIp} • ${if (telemetry.pingLatencyMs > 0) "${telemetry.pingLatencyMs}ms" else "Offline"}",
+                                          text = "IP: " + telemetry.tvIp + " • " + (if (telemetry.pingLatencyMs > 0) telemetry.pingLatencyMs.toString() + "ms" else "Offline"),
                                           color = Color.White.copy(alpha = 0.70f),
                                           fontSize = (12 * settings.fontScale).sp,
                                           fontWeight = settings.fontWeight
                                       )
                                       Spacer(Modifier.height(8.dp))
 
-                                      // Status Badge with Colored Indicator LED
                                       Row(
                                           verticalAlignment = Alignment.CenterVertically,
                                           horizontalArrangement = Arrangement.Center
@@ -1138,7 +1116,6 @@ jobs:
 
                                       Spacer(Modifier.height(8.dp))
 
-                                      // Network Speed & Wi-Fi Link
                                       Row(
                                           modifier = Modifier
                                               .fillMaxWidth(0.9f)
@@ -1148,12 +1125,11 @@ jobs:
                                           horizontalArrangement = Arrangement.SpaceBetween,
                                           verticalAlignment = Alignment.CenterVertically
                                       ) {
-                                          Text("Wi-Fi: ${telemetry.wifiSsid}", color = Color.White.copy(alpha = 0.75f), fontSize = 11.sp)
-                                          Text("Speed: ${telemetry.wifiLinkSpeed}", color = Color.White.copy(alpha = 0.75f), fontSize = 11.sp)
+                                          Text("Wi-Fi: " + telemetry.wifiSsid, color = Color.White.copy(alpha = 0.75f), fontSize = 11.sp)
+                                          Text("Speed: " + telemetry.wifiLinkSpeed, color = Color.White.copy(alpha = 0.75f), fontSize = 11.sp)
                                       }
                                   }
 
-                                  // Power Button
                                   Row(
                                       modifier = Modifier.fillMaxWidth(),
                                       horizontalArrangement = Arrangement.Start
@@ -1179,13 +1155,11 @@ jobs:
                                       }
                                   }
 
-                                  // D-Pad Dial (Sends Real KeyCodes)
                                   SquircleDPad(
                                       onCommand = { cmd -> viewModel.sendCommand(cmd) },
                                       radius = settings.cornerRadius
                                   )
 
-                                  // Navigation Row: Back, Home, Assistant
                                   Row(
                                       modifier = Modifier
                                           .fillMaxWidth(0.85f)
@@ -1204,7 +1178,6 @@ jobs:
                                       }
                                   }
 
-                                  // Volume & Channel Capsules
                                   Row(
                                       modifier = Modifier.fillMaxWidth(0.82f),
                                       horizontalArrangement = Arrangement.SpaceBetween,
@@ -1228,7 +1201,6 @@ jobs:
                                   )
                               }
 
-                              // DIALOG 1: Enter TV IP Address
                               if (showIpDialog) {
                                   AlertDialog(
                                       onDismissRequest = { showIpDialog = false },
@@ -1259,7 +1231,6 @@ jobs:
                                   )
                               }
 
-                              // DIALOG 2: Enter 6-digit Code from TV Screen
                               if (viewModel.activePairingSession != null) {
                                   AlertDialog(
                                       onDismissRequest = { viewModel.activePairingSession = null },
@@ -1289,7 +1260,6 @@ jobs:
                                   )
                               }
 
-                              // Settings Bottom Sheet
                               if (showSettingsSheet) {
                                   ModalBottomSheet(
                                       onDismissRequest = { showSettingsSheet = false },
@@ -1305,7 +1275,7 @@ jobs:
                                           Text("Interface Customization", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
 
                                           Column {
-                                              Text("Squircle Corner Radius: ${settings.squircleRadiusDp.toInt()} dp", color = Color.White.copy(alpha = 0.8f), fontSize = 13.sp)
+                                              Text("Squircle Corner Radius: " + settings.squircleRadiusDp.toInt().toString() + " dp", color = Color.White.copy(alpha = 0.8f), fontSize = 13.sp)
                                               Slider(
                                                   value = settings.squircleRadiusDp,
                                                   onValueChange = { viewModel.updateSquircleRadius(it) },
@@ -1314,7 +1284,7 @@ jobs:
                                           }
 
                                           Column {
-                                              Text("Typography Scale: ${String.format("%.2f", settings.fontScale)}x", color = Color.White.copy(alpha = 0.8f), fontSize = 13.sp)
+                                              Text("Typography Scale: " + String.format("%.2f", settings.fontScale) + "x", color = Color.White.copy(alpha = 0.8f), fontSize = 13.sp)
                                               Slider(
                                                   value = settings.fontScale,
                                                   onValueChange = { viewModel.updateFontScale(it) },
