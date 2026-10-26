@@ -28,14 +28,12 @@ jobs:
 
           files = {}
 
-          # 1. Properties file (Fixes checkDebugAarMetadata error)
           files["gradle.properties"] = """
           android.useAndroidX=true
           android.nonTransitiveRClass=true
           org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
           """
 
-          # 2. Settings configuration
           files["settings.gradle.kts"] = """
           pluginManagement {
               repositories {
@@ -55,7 +53,6 @@ jobs:
           include(":app")
           """
 
-          # 3. Root build configuration
           files["build.gradle.kts"] = """
           plugins {
               id("com.android.application") version "8.4.1" apply false
@@ -63,7 +60,6 @@ jobs:
           }
           """
 
-          # 4. App module configuration
           files["app/build.gradle.kts"] = """
           plugins {
               id("com.android.application")
@@ -94,6 +90,14 @@ jobs:
               composeOptions {
                   kotlinCompilerExtensionVersion = "1.5.14"
               }
+              packaging {
+                  resources {
+                      excludes += "/META-INF/{AL2.0,LGPL2.1}"
+                      excludes += "META-INF/INDEX.LIST"
+                      excludes += "META-INF/versions/9/OSGI-INF/MANIFEST.MF"
+                      excludes += "META-INF/*.version"
+                  }
+              }
           }
 
           dependencies {
@@ -113,11 +117,9 @@ jobs:
               implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.8.1")
               implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
               implementation("com.squareup.okhttp3:okhttp:4.12.0")
-              implementation("org.bouncycastle:bcpkix-jdk18on:1.78.1")
           }
           """
 
-          # 5. Manifest
           files["app/src/main/AndroidManifest.xml"] = """<?xml version="1.0" encoding="utf-8"?>
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
               <uses-permission android:name="android.permission.INTERNET" />
@@ -147,7 +149,6 @@ jobs:
           </manifest>
           """
 
-          # 6. Source Files
           files["app/src/main/java/com/cmf/tvremote/RemoteApplication.kt"] = """package com.cmf.tvremote
           import android.app.Application
 
@@ -189,7 +190,10 @@ jobs:
           import androidx.compose.foundation.shape.CircleShape
           import androidx.compose.foundation.shape.RoundedCornerShape
           import androidx.compose.material.icons.Icons
-          import androidx.compose.material.icons.filled.*
+          import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
+          import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+          import androidx.compose.material.icons.filled.KeyboardArrowDown
+          import androidx.compose.material.icons.filled.KeyboardArrowUp
           import androidx.compose.material3.*
           import androidx.compose.runtime.Composable
           import androidx.compose.ui.Alignment
@@ -219,10 +223,10 @@ jobs:
                       Icon(Icons.Default.KeyboardArrowDown, null, tint = Color.White)
                   }
                   IconButton(onClick = { onCommand(RemoteCommand.DPAD_LEFT) }, modifier = Modifier.align(Alignment.CenterStart).padding(start = 8.dp)) {
-                      Icon(Icons.Default.KeyboardArrowLeft, null, tint = Color.White)
+                      Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, null, tint = Color.White)
                   }
                   IconButton(onClick = { onCommand(RemoteCommand.DPAD_RIGHT) }, modifier = Modifier.align(Alignment.CenterEnd).padding(end = 8.dp)) {
-                      Icon(Icons.Default.KeyboardArrowRight, null, tint = Color.White)
+                      Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, tint = Color.White)
                   }
                   Box(
                       modifier = Modifier.size(80.dp).clip(CircleShape).background(Color(0xFF32343A)).clickable { onCommand(RemoteCommand.SELECT) },
@@ -242,7 +246,7 @@ jobs:
                   Box(Modifier.weight(1f).fillMaxWidth().clickable { onUp() }, contentAlignment = Alignment.Center) {
                       Text(labelUp, color = Color.White)
                   }
-                  Divider(color = Color.White.copy(alpha = 0.1f), thickness = 0.5.dp)
+                  HorizontalDivider(color = Color.White.copy(alpha = 0.1f), thickness = 0.5.dp)
                   Box(Modifier.weight(1f).fillMaxWidth().clickable { onDown() }, contentAlignment = Alignment.Center) {
                       Text(labelDown, color = Color.White)
                   }
@@ -263,7 +267,10 @@ jobs:
           import androidx.compose.foundation.shape.CircleShape
           import androidx.compose.foundation.verticalScroll
           import androidx.compose.material.icons.Icons
-          import androidx.compose.material.icons.filled.*
+          import androidx.compose.material.icons.automirrored.filled.ArrowBack
+          import androidx.compose.material.icons.filled.Home
+          import androidx.compose.material.icons.filled.Mic
+          import androidx.compose.material.icons.filled.PowerSettingsNew
           import androidx.compose.material3.*
           import androidx.compose.runtime.*
           import androidx.compose.ui.Alignment
@@ -319,7 +326,7 @@ jobs:
                               TactileDPad(onCommand = { viewModel.send(it) })
 
                               Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-                                  IconButton(onClick = { viewModel.send(RemoteCommand.BACK) }) { Icon(Icons.Default.ArrowBack, null, tint = Color.White) }
+                                  IconButton(onClick = { viewModel.send(RemoteCommand.BACK) }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, null, tint = Color.White) }
                                   IconButton(onClick = { viewModel.send(RemoteCommand.HOME) }) { Icon(Icons.Default.Home, null, tint = Color.White) }
                                   IconButton(onClick = { viewModel.send(RemoteCommand.ASSISTANT) }) { Icon(Icons.Default.Mic, null, tint = Color.White) }
                               }
@@ -350,7 +357,7 @@ jobs:
               with open(path, "w", encoding="utf-8") as f:
                   f.write(content.strip() + "\n")
 
-          print("Generated project with AndroidX support successfully.")
+          print("Generated project with clean packaging resources.")
           EOF
 
       - name: Create Project ZIP Archive
