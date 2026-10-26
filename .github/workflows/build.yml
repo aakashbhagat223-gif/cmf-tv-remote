@@ -16,8 +16,10 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Setup Gradle
+      - name: Setup Gradle 8.6
         uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: "8.6"
 
       - name: Generate Android Project Files
         run: |
@@ -49,7 +51,6 @@ jobs:
           plugins {
               id("com.android.application") version "8.4.1" apply false
               id("org.jetbrains.kotlin.android") version "1.9.24" apply false
-              id("com.google.dagger.hilt.android") version "2.51.1" apply false
           }
           """
 
@@ -57,8 +58,6 @@ jobs:
           plugins {
               id("com.android.application")
               id("org.jetbrains.kotlin.android")
-              id("kotlin-kapt")
-              id("com.google.dagger.hilt.android")
           }
 
           android {
@@ -90,7 +89,9 @@ jobs:
           dependencies {
               implementation("androidx.core:core-ktx:1.13.1")
               implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.5")
+              implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.5")
               implementation("androidx.activity:activity-compose:1.9.2")
+              
               val composeBom = platform("androidx.compose:compose-bom:2024.09.00")
               implementation(composeBom)
               implementation("androidx.compose.ui:ui")
@@ -98,8 +99,7 @@ jobs:
               implementation("androidx.compose.material3:material3")
               implementation("androidx.compose.material:material-icons-extended")
               implementation("androidx.datastore:datastore-preferences:1.1.1")
-              implementation("com.google.dagger:hilt-android:2.51.1")
-              kapt("com.google.dagger:hilt-compiler:2.51.1")
+              
               implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.8.1")
               implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
               implementation("com.squareup.okhttp3:okhttp:4.12.0")
@@ -138,9 +138,7 @@ jobs:
 
           files["app/src/main/java/com/cmf/tvremote/RemoteApplication.kt"] = """package com.cmf.tvremote
           import android.app.Application
-          import dagger.hilt.android.HiltAndroidApp
 
-          @HiltAndroidApp
           class RemoteApplication : Application()
           """
 
@@ -150,8 +148,6 @@ jobs:
 
           data class UiCustomizationConfig(
               val fontScale: Float = 1.0f,
-              val fontWeightDelta: Int = 0,
-              val backgroundStyle: BackgroundStyle = BackgroundStyle.FROSTED_GLASS,
               val cornerRadiusDp: Int = 24
           )
 
@@ -172,105 +168,11 @@ jobs:
           )
           """
 
-          files["app/src/main/java/com/cmf/tvremote/data/local/UserPreferencesDataStore.kt"] = """package com.cmf.tvremote.data.local
-          import android.content.Context
-          import androidx.datastore.preferences.core.*
-          import androidx.datastore.preferences.preferencesDataStore
-          import com.cmf.tvremote.domain.model.BackgroundStyle
-          import com.cmf.tvremote.domain.model.UiCustomizationConfig
-          import dagger.hilt.android.qualifiers.ApplicationContext
-          import kotlinx.coroutines.flow.Flow
-          import kotlinx.coroutines.flow.catch
-          import kotlinx.coroutines.flow.map
-          import java.io.IOException
-          import javax.inject.Inject
-          import javax.inject.Singleton
-
-          private val Context.dataStore by preferencesDataStore(name = "user_preferences")
-
-          @Singleton
-          class UserPreferencesDataStore @Inject constructor(@ApplicationContext private val context: Context) {
-              val customizationConfig: Flow<UiCustomizationConfig> = context.dataStore.data
-                  .catch { if (it is IOException) emit(emptyPreferences()) else throw it }
-                  .map { prefs ->
-                      UiCustomizationConfig(
-                          fontScale = prefs[floatPreferencesKey("font_scale")] ?: 1.0f,
-                          cornerRadiusDp = prefs[intPreferencesKey("corner_radius_dp")] ?: 24
-                      )
-                  }
-              suspend fun updateCustomization(config: UiCustomizationConfig) {
-                  context.dataStore.edit { prefs ->
-                      prefs[floatPreferencesKey("font_scale")] = config.fontScale
-                      prefs[intPreferencesKey("corner_radius_dp")] = config.cornerRadiusDp
-                  }
-              }
-          }
-          """
-
-          files["app/src/main/java/com/cmf/tvremote/data/local/KeystoreManager.kt"] = """package com.cmf.tvremote.data.local
-          import java.security.KeyPairGenerator
-          import java.security.SecureRandom
-          import javax.inject.Inject
-          import javax.inject.Singleton
-          import javax.net.ssl.SSLContext
-          import javax.net.ssl.TrustManager
-          import javax.net.ssl.X509TrustManager
-          import java.security.cert.X509Certificate
-
-          @Singleton
-          class KeystoreManager @Inject constructor() {
-              fun buildSslContext(): SSLContext {
-                  val trustAllCerts = arrayOf<TrustManager>(object : X509TrustManager {
-                      override fun checkClientTrusted(chain: Array<X509Certificate>?, authType: String?) {}
-                      override fun checkServerTrusted(chain: Array<X509Certificate>?, authType: String?) {}
-                      override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
-                  })
-                  return SSLContext.getInstance("TLSv1.3").apply {
-                      init(null, trustAllCerts, SecureRandom())
-                  }
-              }
-          }
-          """
-
-          files["app/src/main/java/com/cmf/tvremote/data/network/AndroidTvNetwork.kt"] = """package com.cmf.tvremote.data.network
-          import android.content.Context
-          import android.net.nsd.NsdManager
-          import com.cmf.tvremote.data.local.KeystoreManager
-          import com.cmf.tvremote.domain.model.RemoteCommand
-          import dagger.hilt.android.qualifiers.ApplicationContext
-          import kotlinx.coroutines.Dispatchers
-          import kotlinx.coroutines.flow.Flow
-          import kotlinx.coroutines.flow.flow
-          import kotlinx.coroutines.withContext
-          import java.net.InetAddress
-          import javax.inject.Inject
-          import javax.inject.Singleton
-
-          data class DiscoveredTvDevice(val name: String, val host: InetAddress, val port: Int)
-
-          @Singleton
-          class AndroidTvDiscoveryService @Inject constructor(@ApplicationContext private val context: Context) {
-              fun discoverDevices(): Flow<List<DiscoveredTvDevice>> = flow {
-                  emit(listOf(DiscoveredTvDevice("Xiaomi Google TV", InetAddress.getByName("192.168.1.114"), 6466)))
-              }
-          }
-
-          @Singleton
-          class AndroidTvSslSocketManager @Inject constructor(private val keystoreManager: KeystoreManager) {
-              suspend fun connect(host: InetAddress, port: Int = 6466): Result<Unit> = Result.success(Unit)
-              suspend fun sendCommand(command: RemoteCommand): Result<Unit> = Result.success(Unit)
-          }
-          """
-
           files["app/src/main/java/com/cmf/tvremote/data/ir/IrHardwareManager.kt"] = """package com.cmf.tvremote.data.ir
           import android.content.Context
           import android.content.pm.PackageManager
-          import dagger.hilt.android.qualifiers.ApplicationContext
-          import javax.inject.Inject
-          import javax.inject.Singleton
 
-          @Singleton
-          class IrHardwareManager @Inject constructor(@ApplicationContext private val context: Context) {
+          class IrHardwareManager(private val context: Context) {
               val isIrSupported: Boolean
                   get() = context.packageManager.hasSystemFeature(PackageManager.FEATURE_CONSUMER_IR)
           }
@@ -347,6 +249,7 @@ jobs:
           """
 
           files["app/src/main/java/com/cmf/tvremote/MainActivity.kt"] = """package com.cmf.tvremote
+          import android.app.Application
           import android.os.Bundle
           import androidx.activity.ComponentActivity
           import androidx.activity.compose.setContent
@@ -367,28 +270,19 @@ jobs:
           import androidx.compose.ui.graphics.Color
           import androidx.compose.ui.unit.dp
           import androidx.compose.ui.unit.sp
-          import androidx.lifecycle.ViewModel
-          import androidx.lifecycle.viewModelScope
+          import androidx.lifecycle.AndroidViewModel
           import com.cmf.tvremote.data.ir.IrHardwareManager
           import com.cmf.tvremote.domain.model.*
           import com.cmf.tvremote.presentation.components.*
-          import dagger.hilt.android.AndroidEntryPoint
-          import dagger.hilt.android.lifecycle.HiltViewModel
           import kotlinx.coroutines.flow.MutableStateFlow
-          import kotlinx.coroutines.flow.asStateFlow
-          import kotlinx.coroutines.launch
-          import javax.inject.Inject
 
-          @HiltViewModel
-          class RemoteViewModel @Inject constructor(
-              private val irHardwareManager: IrHardwareManager
-          ) : ViewModel() {
+          class RemoteViewModel(application: Application) : AndroidViewModel(application) {
+              private val irHardwareManager = IrHardwareManager(application)
               val state = MutableStateFlow(TvConnectionState())
               val isIrSupported = irHardwareManager.isIrSupported
               fun send(cmd: RemoteCommand) {}
           }
 
-          @AndroidEntryPoint
           class MainActivity : ComponentActivity() {
               private val viewModel: RemoteViewModel by viewModels()
 
@@ -413,7 +307,6 @@ jobs:
                                   Text("IP: \${conn.connectedIp} • \${conn.pingLatencyMs}ms", color = Color(0xFF4ADE80), fontSize = 12.sp)
                                   Spacer(Modifier.height(8.dp))
                                   Text("Now Playing: \${conn.nowPlayingTitle}", color = Color.White.copy(alpha = 0.8f), fontSize = 14.sp)
-                                  
                               }
 
                               // Remote Panel
