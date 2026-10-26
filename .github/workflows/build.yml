@@ -28,6 +28,14 @@ jobs:
 
           files = {}
 
+          # 1. Properties file (Fixes checkDebugAarMetadata error)
+          files["gradle.properties"] = """
+          android.useAndroidX=true
+          android.nonTransitiveRClass=true
+          org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+          """
+
+          # 2. Settings configuration
           files["settings.gradle.kts"] = """
           pluginManagement {
               repositories {
@@ -47,6 +55,7 @@ jobs:
           include(":app")
           """
 
+          # 3. Root build configuration
           files["build.gradle.kts"] = """
           plugins {
               id("com.android.application") version "8.4.1" apply false
@@ -54,6 +63,7 @@ jobs:
           }
           """
 
+          # 4. App module configuration
           files["app/build.gradle.kts"] = """
           plugins {
               id("com.android.application")
@@ -62,12 +72,12 @@ jobs:
 
           android {
               namespace = "com.cmf.tvremote"
-              compileSdk = 35
+              compileSdk = 34
 
               defaultConfig {
                   applicationId = "com.cmf.tvremote"
                   minSdk = 26
-                  targetSdk = 35
+                  targetSdk = 34
                   versionCode = 1
                   versionName = "1.0.0"
               }
@@ -92,7 +102,7 @@ jobs:
               implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.5")
               implementation("androidx.activity:activity-compose:1.9.2")
               
-              val composeBom = platform("androidx.compose:compose-bom:2024.09.00")
+              val composeBom = platform("androidx.compose:compose-bom:2024.04.01")
               implementation(composeBom)
               implementation("androidx.compose.ui:ui")
               implementation("androidx.compose.ui:ui-graphics")
@@ -107,6 +117,7 @@ jobs:
           }
           """
 
+          # 5. Manifest
           files["app/src/main/AndroidManifest.xml"] = """<?xml version="1.0" encoding="utf-8"?>
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
               <uses-permission android:name="android.permission.INTERNET" />
@@ -136,6 +147,7 @@ jobs:
           </manifest>
           """
 
+          # 6. Source Files
           files["app/src/main/java/com/cmf/tvremote/RemoteApplication.kt"] = """package com.cmf.tvremote
           import android.app.Application
 
@@ -144,24 +156,15 @@ jobs:
 
           files["app/src/main/java/com/cmf/tvremote/domain/model/Models.kt"] = """package com.cmf.tvremote.domain.model
 
-          enum class BackgroundStyle { SOLID_DARK, OLED_BLACK, FROSTED_GLASS }
-
-          data class UiCustomizationConfig(
-              val fontScale: Float = 1.0f,
-              val cornerRadiusDp: Int = 24
-          )
-
           enum class RemoteCommand {
               POWER, DPAD_UP, DPAD_DOWN, DPAD_LEFT, DPAD_RIGHT, SELECT,
-              BACK, HOME, ASSISTANT, VOLUME_UP, VOLUME_DOWN,
-              NETFLIX, PRIME_VIDEO, YOUTUBE, APPS
+              BACK, HOME, ASSISTANT, VOLUME_UP, VOLUME_DOWN
           }
 
           data class TvConnectionState(
               val isConnected: Boolean = true,
               val connectedIp: String = "192.168.1.114",
               val pingLatencyMs: Long = 12,
-              val currentSsid: String = "CMF-Home-5G",
               val activeInput: String = "HDMI 1 (eARC)",
               val nowPlayingTitle: String = "Interstellar",
               val nowPlayingArtist: String = "4K HDR • Dolby Atmos"
@@ -196,7 +199,6 @@ jobs:
           import androidx.compose.ui.graphics.Color
           import androidx.compose.ui.unit.Dp
           import androidx.compose.ui.unit.dp
-          import androidx.compose.ui.unit.sp
           import com.cmf.tvremote.domain.model.RemoteCommand
 
           fun Modifier.glassmorphic(cornerRadius: Dp = 24.dp): Modifier = this
@@ -301,15 +303,13 @@ jobs:
                               horizontalAlignment = Alignment.CenterHorizontally,
                               verticalArrangement = Arrangement.spacedBy(20.dp)
                           ) {
-                              // Dashboard Card
                               Column(modifier = Modifier.fillMaxWidth().glassmorphic().padding(16.dp)) {
                                   Text("Xiaomi Google TV", color = Color.White, fontSize = 18.sp)
-                                  Text("IP: \${conn.connectedIp} • \${conn.pingLatencyMs}ms", color = Color(0xFF4ADE80), fontSize = 12.sp)
+                                  Text("IP: " + conn.connectedIp + " • " + conn.pingLatencyMs + "ms", color = Color(0xFF4ADE80), fontSize = 12.sp)
                                   Spacer(Modifier.height(8.dp))
-                                  Text("Now Playing: \${conn.nowPlayingTitle}", color = Color.White.copy(alpha = 0.8f), fontSize = 14.sp)
+                                  Text("Now Playing: " + conn.nowPlayingTitle, color = Color.White.copy(alpha = 0.8f), fontSize = 14.sp)
                               }
 
-                              // Remote Panel
                               Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                                   Box(Modifier.size(48.dp).glassmorphic(24.dp).clickable { viewModel.send(RemoteCommand.POWER) }, contentAlignment = Alignment.Center) {
                                       Icon(Icons.Default.PowerSettingsNew, null, tint = Color(0xFFFF453A))
@@ -329,7 +329,6 @@ jobs:
                                   CapsuleRocker("∧", "∨", onUp = {}, onDown = {})
                               }
 
-                              // Hardware Diagnostic Info
                               Box(Modifier.fillMaxWidth().glassmorphic(16.dp).padding(12.dp), contentAlignment = Alignment.Center) {
                                   Text(
                                       text = if (viewModel.isIrSupported) "IR Blaster: Active" else "IR Blaster: Not Supported on CMF Phone (2) (Using Wi-Fi)",
@@ -351,12 +350,12 @@ jobs:
               with open(path, "w", encoding="utf-8") as f:
                   f.write(content.strip() + "\n")
 
-          print("Generated all Android project files successfully.")
+          print("Generated project with AndroidX support successfully.")
           EOF
 
       - name: Create Project ZIP Archive
         run: |
-          zip -r cmf-tv-remote-source.zip settings.gradle.kts build.gradle.kts app/
+          zip -r cmf-tv-remote-source.zip settings.gradle.kts build.gradle.kts gradle.properties app/
 
       - name: Upload Project ZIP (Full Source Code)
         uses: actions/upload-artifact@v4
