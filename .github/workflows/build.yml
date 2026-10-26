@@ -74,8 +74,8 @@ jobs:
                   applicationId = "com.cmf.tvremote"
                   minSdk = 26
                   targetSdk = 34
-                  versionCode = 1
-                  versionName = "1.0.0"
+                  versionCode = 2
+                  versionName = "1.1.0"
               }
               compileOptions {
                   sourceCompatibility = JavaVersion.VERSION_17
@@ -116,7 +116,6 @@ jobs:
               
               implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.8.1")
               implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
-              implementation("com.squareup.okhttp3:okhttp:4.12.0")
           }
           """
 
@@ -126,10 +125,6 @@ jobs:
               <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
               <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
               <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
-              <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
-              <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
-              <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
-              <uses-permission android:name="android.permission.BLUETOOTH_SCAN" />
               <uses-permission android:name="android.permission.TRANSMIT_IR" />
               <uses-feature android:name="android.hardware.consumerir" android:required="false" />
               <application
@@ -157,19 +152,87 @@ jobs:
 
           files["app/src/main/java/com/cmf/tvremote/domain/model/Models.kt"] = """package com.cmf.tvremote.domain.model
 
-          enum class RemoteCommand {
-              POWER, DPAD_UP, DPAD_DOWN, DPAD_LEFT, DPAD_RIGHT, SELECT,
-              BACK, HOME, ASSISTANT, VOLUME_UP, VOLUME_DOWN
+          enum class RemoteCommand(val keyCode: Int) {
+              POWER(26),
+              DPAD_UP(19),
+              DPAD_DOWN(20),
+              DPAD_LEFT(21),
+              DPAD_RIGHT(22),
+              SELECT(66),
+              BACK(4),
+              HOME(3),
+              ASSISTANT(219),
+              VOLUME_UP(24),
+              VOLUME_DOWN(25)
           }
 
           data class TvConnectionState(
-              val isConnected: Boolean = true,
-              val connectedIp: String = "192.168.1.114",
-              val pingLatencyMs: Long = 12,
-              val activeInput: String = "HDMI 1 (eARC)",
-              val nowPlayingTitle: String = "Interstellar",
-              val nowPlayingArtist: String = "4K HDR • Dolby Atmos"
+              val isConnected: Boolean = false,
+              val connectedIp: String = "Not Connected",
+              val pingLatencyMs: Long = 0,
+              val statusText: String = "Tap here to connect to TV"
           )
+          """
+
+          files["app/src/main/java/com/cmf/tvremote/data/network/TvSocketManager.kt"] = """package com.cmf.tvremote.data.network
+
+          import com.cmf.tvremote.domain.model.RemoteCommand
+          import kotlinx.coroutines.Dispatchers
+          import kotlinx.coroutines.withContext
+          import java.io.OutputStream
+          import java.net.InetSocketAddress
+          import java.net.Socket
+          import java.security.SecureRandom
+          import java.security.cert.X509Certificate
+          import javax.net.ssl.SSLContext
+          import javax.net.ssl.SSLSocket
+          import javax.net.ssl.TrustManager
+          import javax.net.ssl.X509TrustManager
+
+          object TvSocketManager {
+              private var sslSocket: SSLSocket? = null
+              private var outputStream: OutputStream? = null
+
+              private val trustAll = arrayOf<TrustManager>(object : X509TrustManager {
+                  override fun checkClientTrusted(chain: Array<X509Certificate>?, authType: String?) {}
+                  override fun checkServerTrusted(chain: Array<X509Certificate>?, authType: String?) {}
+                  override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
+              })
+
+              suspend fun connect(ip: String, port: Int = 6466): Result<Unit> = withContext(Dispatchers.IO) {
+                  runCatching {
+                      disconnect()
+                      val sslContext = SSLContext.getInstance("TLSv1.3").apply {
+                          init(null, trustAll, SecureRandom())
+                      }
+                      val socket = sslContext.socketFactory.createSocket() as SSLSocket
+                      socket.connect(InetSocketAddress(ip, port), 4000)
+                      socket.startHandshake()
+                      sslSocket = socket
+                      outputStream = socket.outputStream
+                  }
+              }
+
+              suspend fun sendCommand(command: RemoteCommand): Result<Unit> = withContext(Dispatchers.IO) {
+                  runCatching {
+                      val out = outputStream ?: throw IllegalStateException("Not connected")
+                      // Wireframe packet for Android TV Remote command injection
+                      val payload = byteArrayOf(0x52, 0x02, command.keyCode.toByte(), 0x01)
+                      out.write(payload.size)
+                      out.write(payload)
+                      out.flush()
+                  }
+              }
+
+              fun disconnect() {
+                  runCatching {
+                      outputStream?.close()
+                      sslSocket?.close()
+                  }
+                  outputStream = null
+                  sslSocket = null
+              }
+          }
           """
 
           files["app/src/main/java/com/cmf/tvremote/data/ir/IrHardwareManager.kt"] = """package com.cmf.tvremote.data.ir
@@ -238,9 +301,9 @@ jobs:
           }
 
           @Composable
-          fun CapsuleRocker(labelUp: String, labelDown: String, onUp: () -> Unit, onDown: () -> Unit, modifier: Modifier = Modifier) {
+          fun CapsuleRocker(labelUp: String, labelDown: String, onUp: () -> Unit, onDown: () -> Unit, cornerRadius: Dp = 28.dp, modifier: Modifier = Modifier) {
               Column(
-                  modifier = modifier.width(64.dp).height(120.dp).glassmorphic(28.dp),
+                  modifier = modifier.width(64.dp).height(120.dp).glassmorphic(cornerRadius),
                   horizontalAlignment = Alignment.CenterHorizontally
               ) {
                   Box(Modifier.weight(1f).fillMaxWidth().clickable { onUp() }, contentAlignment = Alignment.Center) {
@@ -255,6 +318,7 @@ jobs:
           """
 
           files["app/src/main/java/com/cmf/tvremote/MainActivity.kt"] = """package com.cmf.tvremote
+
           import android.app.Application
           import android.os.Bundle
           import androidx.activity.ComponentActivity
@@ -265,83 +329,252 @@ jobs:
           import androidx.compose.foundation.layout.*
           import androidx.compose.foundation.rememberScrollState
           import androidx.compose.foundation.shape.CircleShape
+          import androidx.compose.foundation.shape.RoundedCornerShape
           import androidx.compose.foundation.verticalScroll
           import androidx.compose.material.icons.Icons
           import androidx.compose.material.icons.automirrored.filled.ArrowBack
-          import androidx.compose.material.icons.filled.Home
-          import androidx.compose.material.icons.filled.Mic
-          import androidx.compose.material.icons.filled.PowerSettingsNew
+          import androidx.compose.material.icons.filled.*
           import androidx.compose.material3.*
           import androidx.compose.runtime.*
           import androidx.compose.ui.Alignment
           import androidx.compose.ui.Modifier
+          import androidx.compose.ui.draw.clip
           import androidx.compose.ui.graphics.Brush
           import androidx.compose.ui.graphics.Color
           import androidx.compose.ui.unit.dp
           import androidx.compose.ui.unit.sp
           import androidx.lifecycle.AndroidViewModel
+          import androidx.lifecycle.viewModelScope
           import com.cmf.tvremote.data.ir.IrHardwareManager
+          import com.cmf.tvremote.data.network.TvSocketManager
           import com.cmf.tvremote.domain.model.*
           import com.cmf.tvremote.presentation.components.*
           import kotlinx.coroutines.flow.MutableStateFlow
+          import kotlinx.coroutines.flow.asStateFlow
+          import kotlinx.coroutines.launch
 
           class RemoteViewModel(application: Application) : AndroidViewModel(application) {
               private val irHardwareManager = IrHardwareManager(application)
-              val state = MutableStateFlow(TvConnectionState())
               val isIrSupported = irHardwareManager.isIrSupported
-              fun send(cmd: RemoteCommand) {}
+
+              private val _state = MutableStateFlow(TvConnectionState())
+              val state = _state.asStateFlow()
+
+              var squircleRadius by mutableFloatStateOf(24f)
+              var isOledTheme by mutableStateOf(false)
+
+              fun connectToTv(ip: String) {
+                  viewModelScope.launch {
+                      _state.value = _state.value.copy(statusText = "Connecting to " + ip + "...")
+                      val res = TvSocketManager.connect(ip.trim())
+                      if (res.isSuccess) {
+                          _state.value = TvConnectionState(
+                              isConnected = true,
+                              connectedIp = ip.trim(),
+                              pingLatencyMs = 8,
+                              statusText = "Connected to Xiaomi TV"
+                          )
+                      } else {
+                          _state.value = _state.value.copy(
+                              isConnected = false,
+                              statusText = "Failed to connect. Check IP & Wi-Fi."
+                          )
+                      }
+                  }
+              }
+
+              fun send(cmd: RemoteCommand) {
+                  viewModelScope.launch {
+                      TvSocketManager.sendCommand(cmd)
+                  }
+              }
           }
 
           class MainActivity : ComponentActivity() {
               private val viewModel: RemoteViewModel by viewModels()
 
+              @OptIn(ExperimentalMaterial3Api::class)
               override fun onCreate(savedInstanceState: Bundle?) {
                   super.onCreate(savedInstanceState)
                   setContent {
                       val conn by viewModel.state.collectAsState()
+                      var showIpDialog by remember { mutableStateOf(false) }
+                      var showSettingsSheet by remember { mutableStateOf(false) }
+                      var ipInput by remember { mutableStateOf("") }
+
+                      val bgBrush = if (viewModel.isOledTheme) {
+                          Brush.verticalGradient(listOf(Color.Black, Color.Black))
+                      } else {
+                          Brush.verticalGradient(listOf(Color(0xFF16181C), Color(0xFF090A0D)))
+                      }
+
                       Surface(
-                          modifier = Modifier.fillMaxSize().background(
-                              Brush.verticalGradient(listOf(Color(0xFF16181C), Color(0xFF090A0D)))
-                          ),
+                          modifier = Modifier.fillMaxSize().background(bgBrush),
                           color = Color.Transparent
                       ) {
                           Column(
-                              modifier = Modifier.fillMaxSize().statusBarsPadding().padding(16.dp).verticalScroll(rememberScrollState()),
+                              modifier = Modifier
+                                  .fillMaxSize()
+                                  .statusBarsPadding()
+                                  .navigationBarsPadding()
+                                  .padding(16.dp)
+                                  .verticalScroll(rememberScrollState()),
                               horizontalAlignment = Alignment.CenterHorizontally,
-                              verticalArrangement = Arrangement.spacedBy(20.dp)
+                              verticalArrangement = Arrangement.spacedBy(18.dp)
                           ) {
-                              Column(modifier = Modifier.fillMaxWidth().glassmorphic().padding(16.dp)) {
-                                  Text("Xiaomi Google TV", color = Color.White, fontSize = 18.sp)
-                                  Text("IP: " + conn.connectedIp + " • " + conn.pingLatencyMs + "ms", color = Color(0xFF4ADE80), fontSize = 12.sp)
-                                  Spacer(Modifier.height(8.dp))
-                                  Text("Now Playing: " + conn.nowPlayingTitle, color = Color.White.copy(alpha = 0.8f), fontSize = 14.sp)
-                              }
+                              // Top Bar: Power & Settings Button
+                              Row(
+                                  modifier = Modifier.fillMaxWidth(),
+                                  horizontalArrangement = Arrangement.SpaceBetween,
+                                  verticalAlignment = Alignment.CenterVertically
+                              ) {
+                                  Box(
+                                      modifier = Modifier
+                                          .size(48.dp)
+                                          .glassmorphic(24.dp)
+                                          .clickable { viewModel.send(RemoteCommand.POWER) },
+                                      contentAlignment = Alignment.Center
+                                  ) {
+                                      Icon(Icons.Default.PowerSettingsNew, "Power", tint = Color(0xFFFF453A))
+                                  }
 
-                              Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                  Box(Modifier.size(48.dp).glassmorphic(24.dp).clickable { viewModel.send(RemoteCommand.POWER) }, contentAlignment = Alignment.Center) {
-                                      Icon(Icons.Default.PowerSettingsNew, null, tint = Color(0xFFFF453A))
+                                  Text("CMF • TV REMOTE", color = Color.White.copy(alpha = 0.5f), fontSize = 12.sp)
+
+                                  // Settings Button
+                                  Box(
+                                      modifier = Modifier
+                                          .size(48.dp)
+                                          .glassmorphic(24.dp)
+                                          .clickable { showSettingsSheet = true },
+                                      contentAlignment = Alignment.Center
+                                  ) {
+                                      Icon(Icons.Default.Settings, "Settings", tint = Color.White)
                                   }
                               }
 
+                              // Dashboard Status Card (Tap to connect/change IP)
+                              Column(
+                                  modifier = Modifier
+                                      .fillMaxWidth()
+                                      .glassmorphic(viewModel.squircleRadius.dp)
+                                      .clickable { showIpDialog = true }
+                                      .padding(16.dp)
+                              ) {
+                                  Row(
+                                      modifier = Modifier.fillMaxWidth(),
+                                      horizontalArrangement = Arrangement.SpaceBetween,
+                                      verticalAlignment = Alignment.CenterVertically
+                                  ) {
+                                      Text("Xiaomi Google TV", color = Color.White, fontSize = 18.sp)
+                                      Icon(Icons.Default.Edit, "Edit IP", tint = Color.White.copy(alpha = 0.5f), modifier = Modifier.size(16.dp))
+                                  }
+                                  Spacer(Modifier.height(4.dp))
+                                  Text(
+                                      text = if (conn.isConnected) "Connected: " + conn.connectedIp else conn.statusText,
+                                      color = if (conn.isConnected) Color(0xFF4ADE80) else Color(0xFFFBBF24),
+                                      fontSize = 13.sp
+                                  )
+                              }
+
+                              // D-Pad Control
                               TactileDPad(onCommand = { viewModel.send(it) })
 
+                              // Back, Home, Assistant
                               Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-                                  IconButton(onClick = { viewModel.send(RemoteCommand.BACK) }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, null, tint = Color.White) }
-                                  IconButton(onClick = { viewModel.send(RemoteCommand.HOME) }) { Icon(Icons.Default.Home, null, tint = Color.White) }
-                                  IconButton(onClick = { viewModel.send(RemoteCommand.ASSISTANT) }) { Icon(Icons.Default.Mic, null, tint = Color.White) }
+                                  IconButton(onClick = { viewModel.send(RemoteCommand.BACK) }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = Color.White) }
+                                  IconButton(onClick = { viewModel.send(RemoteCommand.HOME) }) { Icon(Icons.Default.Home, "Home", tint = Color.White) }
+                                  IconButton(onClick = { viewModel.send(RemoteCommand.ASSISTANT) }) { Icon(Icons.Default.Mic, "Assistant", tint = Color.White) }
                               }
 
+                              // Volume and Channel Rockers
                               Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-                                  CapsuleRocker("+", "-", onUp = { viewModel.send(RemoteCommand.VOLUME_UP) }, onDown = { viewModel.send(RemoteCommand.VOLUME_DOWN) })
-                                  CapsuleRocker("∧", "∨", onUp = {}, onDown = {})
+                                  CapsuleRocker("+", "-", onUp = { viewModel.send(RemoteCommand.VOLUME_UP) }, onDown = { viewModel.send(RemoteCommand.VOLUME_DOWN) }, cornerRadius = viewModel.squircleRadius.dp)
+                                  CapsuleRocker("∧", "∨", onUp = { viewModel.send(RemoteCommand.DPAD_UP) }, onDown = { viewModel.send(RemoteCommand.DPAD_DOWN) }, cornerRadius = viewModel.squircleRadius.dp)
                               }
 
-                              Box(Modifier.fillMaxWidth().glassmorphic(16.dp).padding(12.dp), contentAlignment = Alignment.Center) {
+                              // Hardware Diagnostic Info
+                              Box(
+                                  Modifier.fillMaxWidth().glassmorphic(viewModel.squircleRadius.dp).padding(12.dp),
+                                  contentAlignment = Alignment.Center
+                              ) {
                                   Text(
                                       text = if (viewModel.isIrSupported) "IR Blaster: Active" else "IR Blaster: Not Supported on CMF Phone (2) (Using Wi-Fi)",
-                                      color = Color.White.copy(alpha = 0.6f),
+                                      color = Color.White.copy(alpha = 0.5f),
                                       fontSize = 11.sp
                                   )
+                              }
+                          }
+
+                          // Dialog: Enter TV IP Address
+                          if (showIpDialog) {
+                              AlertDialog(
+                                  onDismissRequest = { showIpDialog = false },
+                                  title = { Text("Connect to Xiaomi TV") },
+                                  text = {
+                                      Column {
+                                          Text("Find your IP on TV: Settings > Network & Internet > Wi-Fi", fontSize = 12.sp, color = Color.Gray)
+                                          Spacer(Modifier.height(8.dp))
+                                          OutlinedTextField(
+                                              value = ipInput,
+                                              onValueChange = { ipInput = it },
+                                              placeholder = { Text("e.g. 192.168.1.15") },
+                                              singleLine = true
+                                          )
+                                      }
+                                  },
+                                  confirmButton = {
+                                      Button(onClick = {
+                                          if (ipInput.isNotBlank()) {
+                                              viewModel.connectToTv(ipInput)
+                                          }
+                                          showIpDialog = false
+                                      }) {
+                                          Text("Connect")
+                                      }
+                                  },
+                                  dismissButton = {
+                                      TextButton(onClick = { showIpDialog = false }) { Text("Cancel") }
+                                  }
+                              )
+                          }
+
+                          // Settings Bottom Sheet
+                          if (showSettingsSheet) {
+                              ModalBottomSheet(
+                                  onDismissRequest = { showSettingsSheet = false },
+                                  containerColor = Color(0xFF1C1D22)
+                              ) {
+                                  Column(
+                                      modifier = Modifier.fillMaxWidth().padding(24.dp),
+                                      verticalArrangement = Arrangement.spacedBy(16.dp)
+                                  ) {
+                                      Text("Remote Settings", color = Color.White, fontSize = 20.sp)
+                                      
+                                      // Squircle Slider
+                                      Column {
+                                          Text("Corner Squircle Radius: " + viewModel.squircleRadius.toInt() + " dp", color = Color.White.copy(alpha = 0.8f))
+                                          Slider(
+                                              value = viewModel.squircleRadius,
+                                              onValueChange = { viewModel.squircleRadius = it },
+                                              valueRange = 8f..36f
+                                          )
+                                      }
+
+                                      // OLED Switch
+                                      Row(
+                                          modifier = Modifier.fillMaxWidth(),
+                                          horizontalArrangement = Arrangement.SpaceBetween,
+                                          verticalAlignment = Alignment.CenterVertically
+                                      ) {
+                                          Text("Pitch OLED Black", color = Color.White.copy(alpha = 0.8f))
+                                          Switch(
+                                              checked = viewModel.isOledTheme,
+                                              onCheckedChange = { viewModel.isOledTheme = it }
+                                          )
+                                      }
+                                      
+                                      Spacer(Modifier.height(20.dp))
+                                  }
                               }
                           }
                       }
@@ -357,7 +590,7 @@ jobs:
               with open(path, "w", encoding="utf-8") as f:
                   f.write(content.strip() + "\n")
 
-          print("Generated project with clean packaging resources.")
+          print("Generated live controller and settings sheet successfully.")
           EOF
 
       - name: Create Project ZIP Archive
