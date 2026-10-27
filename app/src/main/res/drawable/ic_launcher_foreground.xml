@@ -1,0 +1,39 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <group
+        android:scaleX="1.1"
+        android:scaleY="1.1"
+        android:translateX="-5.4"
+        android:translateY="-5.4">
+        <!-- Remote Chassis Silhouette -->
+        <path
+            android:fillColor="#E2E4EB"
+            android:pathData="M40,16 L68,16 A12,12 0 0,1 80,28 L80,80 A12,12 0 0,1 68,92 L40,92 A12,12 0 0,1 28,80 L28,28 A12,12 0 0,1 40,16 Z" />
+        
+        <!-- Power Button -->
+        <path
+            android:fillColor="#FF453A"
+            android:pathData="M54,24 A3,3 0 1,1 54,30 A3,3 0 1,1 54,24" />
+
+        <!-- D-Pad Wheel Aperture -->
+        <path
+            android:fillColor="#2C2F36"
+            android:pathData="M54,40 A14,14 0 1,1 54,68 A14,14 0 1,1 54,40 Z" />
+
+        <!-- Center OK Pad -->
+        <path
+            android:fillColor="#E2E4EB"
+            android:pathData="M54,48 A6,6 0 1,1 54,60 A6,6 0 1,1 54,48 Z" />
+
+        <!-- Vertical Pill Rockers -->
+        <path
+            android:fillColor="#2C2F36"
+            android:pathData="M38,74 L44,74 A3,3 0 0,1 47,77 L47,83 A3,3 0 0,1 44,86 L38,86 A3,3 0 0,1 35,83 L35,77 A3,3 0 0,1 38,74 Z" />
+        <path
+            android:fillColor="#2C2F36"
+            android:pathData="M64,74 L70,74 A3,3 0 0,1 73,77 L73,83 A3,3 0 0,1 70,86 L64,86 A3,3 0 0,1 61,83 L61,77 A3,3 0 0,1 64,74 Z" />
+    </group>
+</vector>
