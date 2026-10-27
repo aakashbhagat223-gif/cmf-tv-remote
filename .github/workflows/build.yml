@@ -1,4 +1,4 @@
-name: Build Real Google TV Remote
+name: Build HomeRemote+ Complete Architecture
 
 on:
   push:
@@ -21,22 +21,25 @@ jobs:
         with:
           gradle-version: "8.6"
 
-      - name: Generate Working Remote Architecture
+      - name: Generate Unified Architecture
         run: |
           python3 - << 'EOF'
           import os
 
-          files = {}
+          def write_file(path, content):
+              d = os.path.dirname(path)
+              if d:
+                  os.makedirs(d, exist_ok=True)
+              with open(path, "w", encoding="utf-8") as f:
+                  f.write(content.strip() + "\n")
 
-          # 1. Properties
-          files["gradle.properties"] = """
+          write_file("gradle.properties", """
           android.useAndroidX=true
           android.nonTransitiveRClass=true
           org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
-          """
+          """)
 
-          # 2. Settings configuration
-          files["settings.gradle.kts"] = """
+          write_file("settings.gradle.kts", """
           pluginManagement {
               repositories {
                   google()
@@ -53,18 +56,16 @@ jobs:
           }
           rootProject.name = "cmf-tv-remote"
           include(":app")
-          """
+          """)
 
-          # 3. Root build configuration
-          files["build.gradle.kts"] = """
+          write_file("build.gradle.kts", """
           plugins {
               id("com.android.application") version "8.4.1" apply false
               id("org.jetbrains.kotlin.android") version "1.9.24" apply false
           }
-          """
+          """)
 
-          # 4. App module configuration
-          files["app/build.gradle.kts"] = """
+          write_file("app/build.gradle.kts", """
           plugins {
               id("com.android.application")
               id("org.jetbrains.kotlin.android")
@@ -78,8 +79,8 @@ jobs:
                   applicationId = "com.cmf.tvremote"
                   minSdk = 26
                   targetSdk = 34
-                  versionCode = 8
-                  versionName = "3.1.0"
+                  versionCode = 12
+                  versionName = "4.1.0"
               }
               compileOptions {
                   sourceCompatibility = JavaVersion.VERSION_17
@@ -97,9 +98,7 @@ jobs:
               packaging {
                   resources {
                       excludes += "/META-INF/{AL2.0,LGPL2.1}"
-                      excludes += "META-INF/INDEX.LIST"
-                      excludes += "META-INF/versions/9/OSGI-INF/MANIFEST.MF"
-                      excludes += "META-INF/*.version"
+                      pickFirsts += "META-INF/**"
                   }
               }
           }
@@ -120,20 +119,26 @@ jobs:
               
               implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.8.1")
               implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
+              implementation("org.bouncycastle:bcpkix-jdk18on:1.78.1")
           }
-          """
+          """)
 
-          # 5. Manifest
-          files["app/src/main/AndroidManifest.xml"] = """<?xml version="1.0" encoding="utf-8"?>
+          write_file("app/src/main/res/values/strings.xml", """
+          <resources>
+              <string name="app_name">HomeRemote+</string>
+          </resources>
+          """)
+
+          write_file("app/src/main/AndroidManifest.xml", """<?xml version="1.0" encoding="utf-8"?>
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
               <uses-permission android:name="android.permission.INTERNET" />
               <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
               <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
-              <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+              <uses-permission android:name="android.permission.VIBRATE" />
               <application
                   android:name=".RemoteApplication"
                   android:allowBackup="true"
-                  android:label="TV Remote"
+                  android:label="@string/app_name"
                   android:theme="@android:style/Theme.Material.NoActionBar">
                   <activity
                       android:name=".MainActivity"
@@ -145,17 +150,15 @@ jobs:
                   </activity>
               </application>
           </manifest>
-          """
+          """)
 
-          # 6. Remote Application
-          files["app/src/main/java/com/cmf/tvremote/RemoteApplication.kt"] = """package com.cmf.tvremote
+          write_file("app/src/main/java/com/cmf/tvremote/RemoteApplication.kt", """package com.cmf.tvremote
           import android.app.Application
 
           class RemoteApplication : Application()
-          """
+          """)
 
-          # 7. Models
-          files["app/src/main/java/com/cmf/tvremote/domain/model/Models.kt"] = """package com.cmf.tvremote.domain.model
+          write_file("app/src/main/java/com/cmf/tvremote/domain/model/Models.kt", """package com.cmf.tvremote.domain.model
 
           enum class RemoteCommand(val keyCode: Int) {
               POWER(26),
@@ -168,7 +171,9 @@ jobs:
               HOME(3),
               ASSISTANT(219),
               VOLUME_UP(24),
-              VOLUME_DOWN(25)
+              VOLUME_DOWN(25),
+              SETTINGS(176),
+              MENU(82)
           }
 
           enum class ConnectionStatus {
@@ -180,29 +185,42 @@ jobs:
 
           data class TvTelemetry(
               val status: ConnectionStatus = ConnectionStatus.DISCONNECTED,
-              val statusMessage: String = "Tap here to connect TV",
-              val tvIp: String = "Not set",
-              val wifiSsid: String = "Disconnected",
-              val wifiLinkSpeed: String = "0 Mbps",
-              val pingLatencyMs: Long = 0
+              val statusMessage: String = "Tap to pair TV",
+              val tvIp: String = "192.168.31.116",
+              val phoneIp: String = "192.168.31.104",
+              val wifiSsid: String = "JIO AIR FIBER_EXT",
+              val wifiLinkSpeed: String = "65 Mbps",
+              val pingLatencyMs: Long = 65,
+              val volumeLevel: Int = 8,
+              val isPowerOn: Boolean = true
           )
-          """
 
-          # 8. Crypto: KeyStore & Hex Helpers
-          files["app/src/main/java/com/cmf/tvremote/data/crypto/KeyStoreHelper.kt"] = """package com.cmf.tvremote.data.crypto
+          data class MediaSessionInfo(
+              val title: String = "Nothing reported",
+              val subtitle: String = "This TV link doesn't share media info yet"
+          )
+          """)
 
-          import android.security.keystore.KeyGenParameterSpec
-          import android.security.keystore.KeyProperties
+          write_file("app/src/main/java/com/cmf/tvremote/data/crypto/KeyStoreHelper.kt", """package com.cmf.tvremote.data.crypto
+
+          import android.content.Context
+          import org.bouncycastle.asn1.x500.X500Name
+          import org.bouncycastle.cert.jcajce.JcaX509CertificateConverter
+          import org.bouncycastle.cert.jcajce.JcaX509v3CertificateBuilder
+          import org.bouncycastle.operator.jcajce.JcaContentSignerBuilder
+          import java.io.File
+          import java.io.FileInputStream
+          import java.io.FileOutputStream
           import java.math.BigInteger
           import java.security.KeyPairGenerator
           import java.security.KeyStore
           import java.security.SecureRandom
           import java.security.cert.X509Certificate
+          import java.util.Date
           import javax.net.ssl.KeyManagerFactory
           import javax.net.ssl.SSLContext
           import javax.net.ssl.TrustManager
           import javax.net.ssl.X509TrustManager
-          import javax.security.auth.x500.X500Principal
 
           fun BigInteger.toRawHexBytes(): ByteArray {
               var hex = this.toString(16)
@@ -218,37 +236,69 @@ jobs:
           }
 
           object KeyStoreHelper {
-              private const val ALIAS = "cmf_google_tv_remote_key"
+              private const val KS_FILE = "tv_remote_client.p12"
+              private const val KS_PASS = "cmf_remote_pass"
+              private const val ALIAS = "client_cert"
+
               private var cachedCert: X509Certificate? = null
               var lastServerCertificate: X509Certificate? = null
 
-              fun getOrCreateCertificate(): X509Certificate {
-                  cachedCert?.let { return it }
-                  val keyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
-                  if (!keyStore.containsAlias(ALIAS)) {
-                      val kpg = KeyPairGenerator.getInstance(KeyProperties.KEY_ALGORITHM_RSA, "AndroidKeyStore")
-                      val spec = KeyGenParameterSpec.Builder(ALIAS, KeyProperties.PURPOSE_SIGN or KeyProperties.PURPOSE_VERIFY)
-                          .setDigests(KeyProperties.DIGEST_SHA256)
-                          .setSignaturePaddings(KeyProperties.SIGNATURE_PADDING_RSA_PKCS1)
-                          .setCertificateSubject(X500Principal("CN=atvremote, O=Google, C=US"))
-                          .setCertificateSerialNumber(BigInteger.ONE)
-                          .setKeySize(2048)
-                          .build()
-                      kpg.initialize(spec)
-                      kpg.generateKeyPair()
+              fun initialize(context: Context) {
+                  if (cachedCert != null) return
+                  val file = File(context.filesDir, KS_FILE)
+                  val ks = KeyStore.getInstance("PKCS12")
+
+                  if (file.exists()) {
+                      runCatching {
+                          FileInputStream(file).use { fis -> ks.load(fis, KS_PASS.toCharArray()) }
+                          val cert = ks.getCertificate(ALIAS) as? X509Certificate
+                          val privKey = ks.getKey(ALIAS, KS_PASS.toCharArray())
+                          if (cert != null && privKey != null) {
+                              cachedCert = cert
+                              return
+                          }
+                      }
                   }
-                  val cert = keyStore.getCertificate(ALIAS) as X509Certificate
+
+                  val kpg = KeyPairGenerator.getInstance("RSA")
+                  kpg.initialize(2048, SecureRandom())
+                  val pair = kpg.generateKeyPair()
+
+                  val now = System.currentTimeMillis()
+                  val startDate = Date(now - 86400000L)
+                  val endDate = Date(now + 20L * 365 * 24 * 3600 * 1000)
+                  val dn = X500Name("CN=atvremote, O=Google, C=US")
+
+                  val certBuilder = JcaX509v3CertificateBuilder(
+                      dn,
+                      BigInteger.valueOf(now),
+                      startDate,
+                      endDate,
+                      dn,
+                      pair.public
+                  )
+                  val signer = JcaContentSignerBuilder("SHA256withRSA").build(pair.private)
+                  val cert = JcaX509CertificateConverter().getCertificate(certBuilder.build(signer))
+
+                  ks.load(null, null)
+                  ks.setKeyEntry(ALIAS, pair.private, KS_PASS.toCharArray(), arrayOf(cert))
+                  FileOutputStream(file).use { fos -> ks.store(fos, KS_PASS.toCharArray()) }
                   cachedCert = cert
-                  return cert
               }
 
-              fun buildSslContext(): SSLContext {
-                  val keyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
-                  getOrCreateCertificate()
+              fun getCertificate(context: Context): X509Certificate {
+                  initialize(context)
+                  return cachedCert!!
+              }
 
-                  val kmf = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm()).apply {
-                      init(keyStore, null)
-                  }
+              fun buildSslContext(context: Context): SSLContext {
+                  initialize(context)
+                  val file = File(context.filesDir, KS_FILE)
+                  val ks = KeyStore.getInstance("PKCS12")
+                  FileInputStream(file).use { fis -> ks.load(fis, KS_PASS.toCharArray()) }
+
+                  val kmf = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm())
+                  kmf.init(ks, KS_PASS.toCharArray())
 
                   val trustManager = object : X509TrustManager {
                       override fun checkClientTrusted(chain: Array<X509Certificate>?, authType: String?) {}
@@ -260,16 +310,16 @@ jobs:
                       override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
                   }
 
-                  return SSLContext.getInstance("TLSv1.3").apply {
+                  return SSLContext.getInstance("TLS").apply {
                       init(kmf.keyManagers, arrayOf<TrustManager>(trustManager), SecureRandom())
                   }
               }
           }
-          """
+          """)
 
-          # 9. Protocol: Google TV Protocol Engine (Pairing & Command Channel)
-          files["app/src/main/java/com/cmf/tvremote/data/network/GoogleTvProtocol.kt"] = """package com.cmf.tvremote.data.network
+          write_file("app/src/main/java/com/cmf/tvremote/data/network/GoogleTvProtocol.kt", """package com.cmf.tvremote.data.network
 
+          import android.content.Context
           import com.cmf.tvremote.data.crypto.KeyStoreHelper
           import com.cmf.tvremote.data.crypto.toRawHexBytes
           import com.cmf.tvremote.domain.model.RemoteCommand
@@ -280,6 +330,7 @@ jobs:
           import java.io.InputStream
           import java.io.OutputStream
           import java.net.InetSocketAddress
+          import java.nio.charset.StandardCharsets
           import java.security.MessageDigest
           import java.security.interfaces.RSAPublicKey
           import javax.net.ssl.SSLSocket
@@ -288,28 +339,27 @@ jobs:
               private var commandSocket: SSLSocket? = null
               private var commandOut: OutputStream? = null
 
-              suspend fun startPairing(tvIp: String): Result<PairingSession> = withContext(Dispatchers.IO) {
+              suspend fun startPairing(context: Context, tvIp: String): Result<PairingSession> = withContext(Dispatchers.IO) {
                   runCatching {
-                      val sslContext = KeyStoreHelper.buildSslContext()
+                      val sslContext = KeyStoreHelper.buildSslContext(context)
                       val socket = sslContext.socketFactory.createSocket() as SSLSocket
+                      socket.useClientMode = true
                       socket.connect(InetSocketAddress(tvIp, 6467), 4000)
                       socket.startHandshake()
 
                       val out = socket.outputStream
                       val inStream = socket.inputStream
 
-                      val serviceNameBytes = "androidtv-remote".toByteArray()
-                      val clientNameBytes = "CMF Phone (2)".toByteArray()
-                      val pairingReqPayload = byteArrayOf(0x0a, serviceNameBytes.size.toByte()) + serviceNameBytes +
-                              byteArrayOf(0x12, clientNameBytes.size.toByte()) + clientNameBytes
-                      sendPoloMessage(out, 10, pairingReqPayload)
-
+                      val sName = "androidtv-remote".toByteArray()
+                      val cName = "CMF Phone (2)".toByteArray()
+                      val pPayload = byteArrayOf(0x0a, sName.size.toByte()) + sName + byteArrayOf(0x12, cName.size.toByte()) + cName
+                      sendPoloMessage(out, 10, pPayload)
                       readPoloMessage(inStream)
 
-                      val configPayload = byteArrayOf(0x0a, 0x06, 0x08, 0x03, 0x10, 0x02, 0x18, 0x06, 0x10, 0x01)
-                      sendPoloMessage(out, 30, configPayload)
-
+                      val cfg = byteArrayOf(0x0a, 0x06, 0x08, 0x03, 0x10, 0x02, 0x18, 0x06, 0x10, 0x01)
+                      sendPoloMessage(out, 30, cfg)
                       readPoloMessage(inStream)
+
                       PairingSession(socket, inStream, out)
                   }
               }
@@ -319,15 +369,13 @@ jobs:
                   private val inStream: InputStream,
                   private val out: OutputStream
               ) {
-                  suspend fun completeWithPin(pin: String): Result<Unit> = withContext(Dispatchers.IO) {
+                  suspend fun completeWithPin(context: Context, pin: String): Result<Unit> = withContext(Dispatchers.IO) {
                       runCatching {
                           val cleanPin = pin.trim().uppercase()
-                          require(cleanPin.length == 6) { "PIN must be exactly 6 characters" }
+                          require(cleanPin.length == 6) { "PIN must be 6 characters" }
 
-                          val clientCert = KeyStoreHelper.getOrCreateCertificate()
-                          val serverCert = KeyStoreHelper.lastServerCertificate
-                              ?: throw IllegalStateException("Server certificate not captured")
-
+                          val clientCert = KeyStoreHelper.getCertificate(context)
+                          val serverCert = KeyStoreHelper.lastServerCertificate ?: throw IllegalStateException("No cert")
                           val clientKey = clientCert.publicKey as RSAPublicKey
                           val serverKey = serverCert.publicKey as RSAPublicKey
 
@@ -346,14 +394,13 @@ jobs:
 
                           val expectedCheck = cleanPin.substring(0, 2).toInt(16)
                           val actualCheck = hash[0].toInt() and 0xFF
-                          require(expectedCheck == actualCheck) { "PIN checksum mismatch. Verify code on TV." }
+                          require(expectedCheck == actualCheck) { "Checksum mismatch" }
 
                           val secretPayload = byteArrayOf(0x0a, 0x20) + hash
                           sendPoloMessage(out, 40, secretPayload)
 
                           val (ackType, _) = readPoloMessage(inStream)
-                          require(ackType == 41) { "TV rejected pairing secret." }
-
+                          require(ackType == 41) { "Pairing rejected" }
                           socket.close()
                       }
                   }
@@ -375,8 +422,7 @@ jobs:
                   var type = 0
                   var i = 0
                   while (i < buf.size) {
-                      val tag = buf[i].toInt() and 0xFF
-                      if (tag == 0x18) {
+                      if ((buf[i].toInt() and 0xFF) == 0x18) {
                           type = buf[i + 1].toInt() and 0xFF
                           break
                       }
@@ -385,22 +431,22 @@ jobs:
                   return Pair(type, buf)
               }
 
-              suspend fun connectCommandChannel(tvIp: String): Result<Unit> = withContext(Dispatchers.IO) {
+              suspend fun connectCommandChannel(context: Context, tvIp: String): Result<Unit> = withContext(Dispatchers.IO) {
                   runCatching {
                       disconnect()
-                      val sslContext = KeyStoreHelper.buildSslContext()
+                      val sslContext = KeyStoreHelper.buildSslContext(context)
                       val socket = sslContext.socketFactory.createSocket() as SSLSocket
+                      socket.useClientMode = true
                       socket.connect(InetSocketAddress(tvIp, 6466), 4000)
                       socket.startHandshake()
 
                       val out = socket.outputStream
-
-                      val configureBytes = byteArrayOf(
+                      val config = byteArrayOf(
                           0x24, 0x0a, 0x22, 0x08, 0xee.toByte(), 0x04, 0x12, 0x1d, 0x18, 0x01, 0x22, 0x01, 0x31,
-                          0x2a, 0x0f, 0x61, 0x6e, 0x64, 0x72, 0x6f, 0x69, 0x74, 0x76, 0x2d, 0x72, 0x65, 0x6d, 0x6f, 0x74, 0x65,
-                          0x32, 0x05, 0x31, 0x2e, 0x30, 0x2e, 0x30
+                          0x2a, 0x0f, 0x61, 0x6e, 0x64, 0x72, 0x6f, 0x69, 0x74, 0x76, 0x2d, 0x72, 0x65, 0x6d, 0x6f,
+                          0x74, 0x65, 0x32, 0x05, 0x31, 0x2e, 0x30, 0x2e, 0x30
                       )
-                      out.write(configureBytes)
+                      out.write(config)
                       out.flush()
 
                       commandSocket = socket
@@ -418,6 +464,17 @@ jobs:
                   }
               }
 
+              suspend fun sendTextString(text: String): Result<Unit> = withContext(Dispatchers.IO) {
+                  runCatching {
+                      val out = commandOut ?: throw IllegalStateException("Not connected")
+                      val b = text.toByteArray(StandardCharsets.UTF_8)
+                      val ime = byteArrayOf(0x12, b.size.toByte()) + b
+                      val msg = byteArrayOf(0x5a, ime.size.toByte()) + ime
+                      out.write(byteArrayOf(msg.size.toByte()) + msg)
+                      out.flush()
+                  }
+              }
+
               fun disconnect() {
                   runCatching {
                       commandOut?.close()
@@ -427,13 +484,71 @@ jobs:
                   commandSocket = null
               }
           }
-          """
+          """)
 
-          # 10. Settings Engine
-          files["app/src/main/java/com/cmf/tvremote/SettingsEngine.kt"] = """package com.cmf.tvremote
+          write_file("app/src/main/java/com/cmf/tvremote/domain/macro/MacroEngine.kt", """package com.cmf.tvremote.domain.macro
+
+          import com.cmf.tvremote.data.network.GoogleTvProtocol
+          import com.cmf.tvremote.domain.model.RemoteCommand
+          import kotlinx.coroutines.delay
+
+          object MacroEngine {
+              suspend fun executeSequence(sequenceRaw: String) {
+                  val tokens = sequenceRaw.trim().split("\\\\s+".toRegex())
+                  var idx = 0
+                  while (idx < tokens.size) {
+                      val token = tokens[idx]
+                      when {
+                          token == "WAIT" -> {
+                              val dur = tokens.getOrNull(idx + 1)?.toLongOrNull() ?: 200L
+                              delay(dur)
+                              idx += 2
+                          }
+                          token.contains("*") -> {
+                              val parts = token.split("*")
+                              val keyToken = parts[0]
+                              val count = parts.getOrNull(1)?.toIntOrNull() ?: 1
+                              val cmd = mapTokenToCommand(keyToken)
+                              repeat(count) {
+                                  cmd?.let { GoogleTvProtocol.sendCommand(it) }
+                                  delay(200)
+                              }
+                              idx++
+                          }
+                          token == "QUICK" && tokens.getOrNull(idx + 1) == "SETTINGS" -> {
+                              GoogleTvProtocol.sendCommand(RemoteCommand.SETTINGS)
+                              idx += 2
+                              delay(200)
+                          }
+                          else -> {
+                              val cmd = mapTokenToCommand(token)
+                              cmd?.let { GoogleTvProtocol.sendCommand(it) }
+                              delay(200)
+                              idx++
+                          }
+                      }
+                  }
+              }
+
+              private fun mapTokenToCommand(token: String): RemoteCommand? = when (token.uppercase()) {
+                  "HOME" -> RemoteCommand.HOME
+                  "OK" -> RemoteCommand.SELECT
+                  "BACK" -> RemoteCommand.BACK
+                  "UP" -> RemoteCommand.DPAD_UP
+                  "DOWN" -> RemoteCommand.DPAD_DOWN
+                  "LEFT" -> RemoteCommand.DPAD_LEFT
+                  "RIGHT" -> RemoteCommand.DPAD_RIGHT
+                  "SETTINGS" -> RemoteCommand.SETTINGS
+                  "MENU" -> RemoteCommand.MENU
+                  "POWER" -> RemoteCommand.POWER
+                  else -> null
+              }
+          }
+          """)
+
+          write_file("app/src/main/java/com/cmf/tvremote/SettingsEngine.kt", """package com.cmf.tvremote
 
           import android.content.Context
-          import androidx.compose.ui.text.font.FontWeight
           import androidx.compose.ui.unit.Dp
           import androidx.compose.ui.unit.dp
           import androidx.datastore.preferences.core.*
@@ -453,85 +568,79 @@ jobs:
 
           data class RemoteUiSettings(
               val fontScale: Float = 1.0f,
-              val fontWeightIndex: Int = 2,
-              val squircleRadiusDp: Float = 26f,
+              val squircleRadiusDp: Float = 24f,
               val wallpaperTheme: WallpaperTheme = WallpaperTheme.WARM_AURORA
           ) {
-              val fontWeight: FontWeight
-                  get() = when (fontWeightIndex) {
-                      0 -> FontWeight.Thin
-                      1 -> FontWeight.Light
-                      2 -> FontWeight.Normal
-                      3 -> FontWeight.Medium
-                      4 -> FontWeight.Bold
-                      else -> FontWeight.Normal
-                  }
-
-              val cornerRadius: Dp
-                  get() = squircleRadiusDp.dp
+              val cornerRadius: Dp get() = squircleRadiusDp.dp
           }
 
           class SettingsEngine(private val context: Context) {
-              private object PreferencesKeys {
-                  val FONT_SCALE = floatPreferencesKey("pref_font_scale")
-                  val FONT_WEIGHT_INDEX = intPreferencesKey("pref_font_weight_idx")
-                  val SQUIRCLE_RADIUS = floatPreferencesKey("pref_squircle_radius")
-                  val WALLPAPER_THEME = stringPreferencesKey("pref_wallpaper_theme")
-                  val SAVED_TV_IP = stringPreferencesKey("pref_saved_tv_ip")
+              private object Keys {
+                  val FONT_SCALE = floatPreferencesKey("font_scale")
+                  val SQUIRCLE_RADIUS = floatPreferencesKey("squircle_radius")
+                  val WALLPAPER = stringPreferencesKey("wallpaper")
+                  val SAVED_IP = stringPreferencesKey("saved_ip")
+                  val MACRO_STREMIO = stringPreferencesKey("macro_stremio")
+                  val MACRO_HDMI2 = stringPreferencesKey("macro_hdmi2")
+                  val MACRO_BL_OPEN = stringPreferencesKey("macro_bl_open")
+                  val MACRO_BL_CLOSE = stringPreferencesKey("macro_bl_close")
+                  val BL_STEP_UNIT = intPreferencesKey("bl_step_unit")
               }
 
               val settingsFlow: Flow<RemoteUiSettings> = context.settingsDataStore.data
                   .catch { if (it is IOException) emit(emptyPreferences()) else throw it }
                   .map { prefs ->
-                      val scale = prefs[PreferencesKeys.FONT_SCALE] ?: 1.0f
-                      val weightIdx = prefs[PreferencesKeys.FONT_WEIGHT_INDEX] ?: 2
-                      val radius = prefs[PreferencesKeys.SQUIRCLE_RADIUS] ?: 26f
-                      val themeName = prefs[PreferencesKeys.WALLPAPER_THEME] ?: WallpaperTheme.WARM_AURORA.name
-                      val theme = runCatching { WallpaperTheme.valueOf(themeName) }.getOrDefault(WallpaperTheme.WARM_AURORA)
-
                       RemoteUiSettings(
-                          fontScale = scale.coerceIn(0.8f, 1.3f),
-                          fontWeightIndex = weightIdx.coerceIn(0, 4),
-                          squircleRadiusDp = radius.coerceIn(8f, 34f),
-                          wallpaperTheme = theme
+                          fontScale = prefs[Keys.FONT_SCALE] ?: 1.0f,
+                          squircleRadiusDp = prefs[Keys.SQUIRCLE_RADIUS] ?: 24f,
+                          wallpaperTheme = runCatching {
+                              WallpaperTheme.valueOf(prefs[Keys.WALLPAPER] ?: "")
+                          }.getOrDefault(WallpaperTheme.WARM_AURORA)
                       )
                   }
 
               val savedIpFlow: Flow<String> = context.settingsDataStore.data
                   .catch { emit(emptyPreferences()) }
-                  .map { it[PreferencesKeys.SAVED_TV_IP] ?: "" }
+                  .map { it[Keys.SAVED_IP] ?: "" }
 
               suspend fun saveTvIp(ip: String) {
-                  context.settingsDataStore.edit { it[PreferencesKeys.SAVED_TV_IP] = ip }
+                  context.settingsDataStore.edit { it[Keys.SAVED_IP] = ip }
               }
 
-              suspend fun updateFontScale(scale: Float) {
-                  context.settingsDataStore.edit { it[PreferencesKeys.FONT_SCALE] = scale }
+              suspend fun updateFontScale(s: Float) {
+                  context.settingsDataStore.edit { it[Keys.FONT_SCALE] = s }
               }
 
-              suspend fun updateFontWeight(weightIndex: Int) {
-                  context.settingsDataStore.edit { it[PreferencesKeys.FONT_WEIGHT_INDEX] = weightIndex }
+              suspend fun updateSquircleRadius(r: Float) {
+                  context.settingsDataStore.edit { it[Keys.SQUIRCLE_RADIUS] = r }
               }
 
-              suspend fun updateSquircleRadius(radiusDp: Float) {
-                  context.settingsDataStore.edit { it[PreferencesKeys.SQUIRCLE_RADIUS] = radiusDp }
+              suspend fun updateWallpaper(t: WallpaperTheme) {
+                  context.settingsDataStore.edit { it[Keys.WALLPAPER] = t.name }
               }
 
-              suspend fun updateWallpaperTheme(theme: WallpaperTheme) {
-                  context.settingsDataStore.edit { it[PreferencesKeys.WALLPAPER_THEME] = theme.name }
+              fun getMacroFlow(key: String, default: String): Flow<String> = context.settingsDataStore.data
+                  .catch { emit(emptyPreferences()) }
+                  .map { it[stringPreferencesKey(key)] ?: default }
+
+              suspend fun saveMacro(key: String, value: String) {
+                  context.settingsDataStore.edit { it[stringPreferencesKey(key)] = value }
               }
           }
-          """
+          """)
 
-          # 11. Components (Sharp Frosted Glass Surfaces)
-          files["app/src/main/java/com/cmf/tvremote/Components.kt"] = """package com.cmf.tvremote
+          write_file("app/src/main/java/com/cmf/tvremote/Components.kt", """package com.cmf.tvremote
 
-          import androidx.compose.animation.core.animateFloatAsState
+          import android.os.Build
+          import android.os.VibrationEffect
+          import android.os.Vibrator
+          import androidx.compose.animation.core.Animatable
+          import androidx.compose.animation.core.Spring
           import androidx.compose.animation.core.spring
           import androidx.compose.foundation.background
           import androidx.compose.foundation.border
           import androidx.compose.foundation.clickable
-          import androidx.compose.foundation.gestures.detectTapGestures
+          import androidx.compose.foundation.gestures.detectHorizontalDragGestures
           import androidx.compose.foundation.interaction.MutableInteractionSource
           import androidx.compose.foundation.layout.*
           import androidx.compose.foundation.shape.CircleShape
@@ -552,10 +661,18 @@ jobs:
           import androidx.compose.ui.graphics.*
           import androidx.compose.ui.hapticfeedback.HapticFeedbackType
           import androidx.compose.ui.input.pointer.pointerInput
+          import androidx.compose.ui.layout.onSizeChanged
+          import androidx.compose.ui.platform.LocalContext
           import androidx.compose.ui.platform.LocalHapticFeedback
           import androidx.compose.ui.text.font.FontWeight
           import androidx.compose.ui.unit.*
           import com.cmf.tvremote.domain.model.RemoteCommand
+          import kotlinx.coroutines.Job
+          import kotlinx.coroutines.delay
+          import kotlinx.coroutines.isActive
+          import kotlinx.coroutines.launch
+          import kotlin.math.abs
+          import kotlin.math.roundToInt
 
           class SquircleShape(val cornerRadius: Dp, private val smoothness: Float = 0.65f) : Shape {
               override fun createOutline(size: Size, layoutDirection: LayoutDirection, density: Density): Outline {
@@ -586,30 +703,19 @@ jobs:
               borderAlpha: Float = 0.28f,
               elevation: Dp = 16.dp
           ): Modifier = this
-              .shadow(
-                  elevation = elevation,
-                  shape = shape,
-                  spotColor = Color.Black.copy(alpha = 0.45f),
-                  ambientColor = Color.Black.copy(alpha = 0.25f)
-              )
+              .shadow(elevation, shape, spotColor = Color.Black.copy(alpha = 0.45f))
               .clip(shape)
               .background(
-                  brush = Brush.verticalGradient(
-                      colors = listOf(
-                          Color.White.copy(alpha = tintAlpha + 0.05f),
-                          Color.White.copy(alpha = tintAlpha)
-                      )
+                  Brush.verticalGradient(
+                      listOf(Color.White.copy(alpha = tintAlpha + 0.05f), Color.White.copy(alpha = tintAlpha))
                   )
               )
               .border(
-                  width = 1.dp,
-                  brush = Brush.verticalGradient(
-                      colors = listOf(
-                          Color.White.copy(alpha = borderAlpha + 0.12f),
-                          Color.White.copy(alpha = borderAlpha * 0.35f)
-                      )
+                  1.dp,
+                  Brush.verticalGradient(
+                      listOf(Color.White.copy(alpha = borderAlpha + 0.12f), Color.White.copy(alpha = borderAlpha * 0.35f))
                   ),
-                  shape = shape
+                  shape
               )
 
           @Composable
@@ -619,18 +725,13 @@ jobs:
               modifier: Modifier = Modifier
           ) {
               val haptic = LocalHapticFeedback.current
-              val outerShape = SquircleShape(cornerRadius = radius + 6.dp)
-              val innerShape = SquircleShape(cornerRadius = (radius * 0.65f))
+              val outerShape = SquircleShape(radius + 6.dp)
+              val innerShape = SquircleShape(radius * 0.65f)
 
               Box(
                   modifier = modifier
                       .size(236.dp)
-                      .iosGlassmorphicSurface(
-                          shape = outerShape,
-                          tintAlpha = 0.14f,
-                          borderAlpha = 0.30f,
-                          elevation = 16.dp
-                      ),
+                      .iosGlassmorphicSurface(outerShape, 0.14f, 0.30f, 16.dp),
                   contentAlignment = Alignment.Center
               ) {
                   Box(
@@ -644,7 +745,7 @@ jobs:
                           },
                       contentAlignment = Alignment.Center
                   ) {
-                      Icon(Icons.Default.KeyboardArrowUp, "Up", tint = Color.White.copy(alpha = 0.95f), modifier = Modifier.size(34.dp))
+                      Icon(Icons.Default.KeyboardArrowUp, null, tint = Color.White.copy(alpha = 0.95f), modifier = Modifier.size(34.dp))
                   }
 
                   Box(
@@ -658,7 +759,7 @@ jobs:
                           },
                       contentAlignment = Alignment.Center
                   ) {
-                      Icon(Icons.Default.KeyboardArrowDown, "Down", tint = Color.White.copy(alpha = 0.95f), modifier = Modifier.size(34.dp))
+                      Icon(Icons.Default.KeyboardArrowDown, null, tint = Color.White.copy(alpha = 0.95f), modifier = Modifier.size(34.dp))
                   }
 
                   Box(
@@ -672,7 +773,7 @@ jobs:
                           },
                       contentAlignment = Alignment.Center
                   ) {
-                      Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, "Left", tint = Color.White.copy(alpha = 0.95f), modifier = Modifier.size(34.dp))
+                      Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, null, tint = Color.White.copy(alpha = 0.95f), modifier = Modifier.size(34.dp))
                   }
 
                   Box(
@@ -686,36 +787,16 @@ jobs:
                           },
                       contentAlignment = Alignment.Center
                   ) {
-                      Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, "Right", tint = Color.White.copy(alpha = 0.95f), modifier = Modifier.size(34.dp))
+                      Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, tint = Color.White.copy(alpha = 0.95f), modifier = Modifier.size(34.dp))
                   }
-
-                  var isPressed by remember { mutableStateOf(false) }
-                  val scale by animateFloatAsState(
-                      targetValue = if (isPressed) 0.92f else 1.0f,
-                      animationSpec = spring(dampingRatio = 0.6f, stiffness = 400f),
-                      label = "ok_scale"
-                  )
 
                   Box(
                       modifier = Modifier
                           .size(76.dp)
-                          .graphicsLayer { scaleX = scale; scaleY = scale }
-                          .iosGlassmorphicSurface(
-                              shape = innerShape,
-                              tintAlpha = 0.28f,
-                              borderAlpha = 0.40f,
-                              elevation = 8.dp
-                          )
-                          .pointerInput(Unit) {
-                              detectTapGestures(
-                                  onPress = {
-                                      isPressed = true
-                                      haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                      tryAwaitRelease()
-                                      isPressed = false
-                                      onCommand(RemoteCommand.SELECT)
-                                  }
-                              )
+                          .iosGlassmorphicSurface(innerShape, 0.28f, 0.40f, 8.dp)
+                          .clickable {
+                              haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                              onCommand(RemoteCommand.SELECT)
                           },
                       contentAlignment = Alignment.Center
                   ) {
@@ -737,12 +818,7 @@ jobs:
                   modifier = modifier
                       .width(66.dp)
                       .height(138.dp)
-                      .iosGlassmorphicSurface(
-                          shape = capsuleShape,
-                          tintAlpha = 0.16f,
-                          borderAlpha = 0.25f,
-                          elevation = 12.dp
-                      ),
+                      .iosGlassmorphicSurface(capsuleShape, 0.16f, 0.25f, 12.dp),
                   horizontalAlignment = Alignment.CenterHorizontally,
                   verticalArrangement = Arrangement.SpaceBetween
               ) {
@@ -781,10 +857,95 @@ jobs:
                   }
               }
           }
-          """
 
-          # 12. Main Activity (Syntax-Checked Telemetry UI)
-          files["app/src/main/java/com/cmf/tvremote/MainActivity.kt"] = """package com.cmf.tvremote
+          @Composable
+          fun BacklightSpringSlider(
+              onIncrement: () -> Unit,
+              onDecrement: () -> Unit,
+              modifier: Modifier = Modifier
+          ) {
+              val context = LocalContext.current
+              val vibrator = remember { context.getSystemService(Vibrator::class.java) }
+              val scope = rememberCoroutineScope()
+              var trackWidthPx by remember { mutableFloatStateOf(0f) }
+              val handleOffsetX = remember { Animatable(0f) }
+              var repeatJob by remember { mutableStateOf<Job?>(null) }
+              val deadZone = 18f
+              val maxTravel = (trackWidthPx / 2f) - 32f
+
+              Box(
+                  modifier = modifier
+                      .fillMaxWidth()
+                      .height(56.dp)
+                      .clip(RoundedCornerShape(28.dp))
+                      .background(Color(0xFF22252B))
+                      .onSizeChanged { trackWidthPx = it.width.toFloat() }
+                      .pointerInput(trackWidthPx) {
+                          detectHorizontalDragGestures(
+                              onDragStart = { repeatJob?.cancel() },
+                              onHorizontalDrag = { change, dragAmount ->
+                                  change.consume()
+                                  scope.launch {
+                                      val newTarget = (handleOffsetX.value + dragAmount).coerceIn(-maxTravel, maxTravel)
+                                      handleOffsetX.snapTo(newTarget)
+
+                                      if (abs(newTarget) >= maxTravel - 2f) {
+                                          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                                              vibrator?.vibrate(VibrationEffect.createOneShot(35, VibrationEffect.DEFAULT_AMPLITUDE))
+                                          }
+                                      }
+
+                                      val offset = handleOffsetX.value
+                                      if (abs(offset) > deadZone) {
+                                          val isRight = offset > 0
+                                          val ratio = ((abs(offset) - deadZone) / (maxTravel - deadZone)).coerceIn(0.1f, 1f)
+                                          val intervalMs = (400 - (280 * ratio)).toLong()
+
+                                          if (repeatJob?.isActive != true) {
+                                              repeatJob = scope.launch {
+                                                  while (isActive) {
+                                                      if (isRight) onIncrement() else onDecrement()
+                                                      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                                                          vibrator?.vibrate(VibrationEffect.createPredefined(VibrationEffect.EFFECT_TICK))
+                                                      }
+                                                      delay(intervalMs)
+                                                  }
+                                              }
+                                          }
+                                      } else {
+                                          repeatJob?.cancel()
+                                      }
+                                  }
+                              },
+                              onDragEnd = {
+                                  repeatJob?.cancel()
+                                  scope.launch {
+                                      handleOffsetX.animateTo(0f, spring(Spring.DampingRatioMediumBouncy, Spring.StiffnessLow))
+                                  }
+                              },
+                              onDragCancel = {
+                                  repeatJob?.cancel()
+                                  scope.launch { handleOffsetX.animateTo(0f) }
+                              }
+                          )
+                      },
+                  contentAlignment = Alignment.Center
+              ) {
+                  Text("—", color = Color.White.copy(alpha = 0.6f), fontSize = 20.sp, fontWeight = FontWeight.Bold, modifier = Modifier.align(Alignment.CenterStart).padding(start = 20.dp))
+                  Box(Modifier.width(2.dp).height(18.dp).background(Color.White.copy(alpha = 0.15f)))
+                  Text("+", color = Color.White.copy(alpha = 0.6f), fontSize = 22.sp, fontWeight = FontWeight.Bold, modifier = Modifier.align(Alignment.CenterEnd).padding(end = 20.dp))
+                  Box(
+                      modifier = Modifier
+                          .offset { IntOffset(handleOffsetX.value.roundToInt(), 0) }
+                          .size(width = 54.dp, height = 44.dp)
+                          .clip(RoundedCornerShape(22.dp))
+                          .background(Color(0xFFE2E4EB))
+                  )
+              }
+          }
+          """)
+
+          write_file("app/src/main/java/com/cmf/tvremote/MainActivity.kt", """package com.cmf.tvremote
 
           import android.app.Application
           import android.content.Context
@@ -804,16 +965,12 @@ jobs:
           import androidx.compose.foundation.verticalScroll
           import androidx.compose.material.icons.Icons
           import androidx.compose.material.icons.automirrored.filled.ArrowBack
-          import androidx.compose.material.icons.filled.Home
-          import androidx.compose.material.icons.filled.Mic
-          import androidx.compose.material.icons.filled.PowerSettingsNew
-          import androidx.compose.material.icons.filled.Settings
+          import androidx.compose.material.icons.filled.*
           import androidx.compose.material3.*
           import androidx.compose.runtime.*
           import androidx.compose.ui.Alignment
           import androidx.compose.ui.Modifier
           import androidx.compose.ui.draw.clip
-          import androidx.compose.ui.draw.shadow
           import androidx.compose.ui.graphics.Brush
           import androidx.compose.ui.graphics.Color
           import androidx.compose.ui.text.font.FontWeight
@@ -822,8 +979,10 @@ jobs:
           import androidx.lifecycle.AndroidViewModel
           import androidx.lifecycle.viewModelScope
           import com.cmf.tvremote.data.network.GoogleTvProtocol
+          import com.cmf.tvremote.domain.macro.MacroEngine
           import com.cmf.tvremote.domain.model.*
           import kotlinx.coroutines.Dispatchers
+          import kotlinx.coroutines.delay
           import kotlinx.coroutines.flow.MutableStateFlow
           import kotlinx.coroutines.flow.SharingStarted
           import kotlinx.coroutines.flow.asStateFlow
@@ -832,10 +991,13 @@ jobs:
           import kotlinx.coroutines.withContext
           import java.net.InetSocketAddress
           import java.net.Socket
+          import java.text.SimpleDateFormat
+          import java.util.Date
+          import java.util.Locale
 
           class RemoteViewModel(application: Application) : AndroidViewModel(application) {
               private val context = application.applicationContext
-              private val settingsEngine = SettingsEngine(context)
+              val settingsEngine = SettingsEngine(context)
 
               private val _telemetry = MutableStateFlow(TvTelemetry())
               val telemetry = _telemetry.asStateFlow()
@@ -855,7 +1017,7 @@ jobs:
                               refreshNetworkInfo(savedIp)
                               connectCommandChannel(savedIp)
                           } else {
-                              refreshNetworkInfo("Not set")
+                              refreshNetworkInfo("192.168.31.116")
                           }
                       }
                   }
@@ -865,13 +1027,13 @@ jobs:
                   viewModelScope.launch {
                       _telemetry.value = _telemetry.value.copy(
                           status = ConnectionStatus.CONNECTING,
-                          statusMessage = "Connecting to TV..."
+                          statusMessage = "Connecting..."
                       )
-                      val res = GoogleTvProtocol.connectCommandChannel(ip)
+                      val res = GoogleTvProtocol.connectCommandChannel(context, ip)
                       if (res.isSuccess) {
                           _telemetry.value = _telemetry.value.copy(
                               status = ConnectionStatus.CONNECTED,
-                              statusMessage = "Connected to Google TV"
+                              statusMessage = "Connected"
                           )
                       } else {
                           _telemetry.value = _telemetry.value.copy(
@@ -885,14 +1047,12 @@ jobs:
               fun refreshNetworkInfo(targetIp: String) {
                   val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
                   val wm = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
-                  val network = cm.activeNetwork
-                  val cap = cm.getNetworkCapabilities(network)
+                  val cap = cm.getNetworkCapabilities(cm.activeNetwork)
 
                   val isWifi = cap?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true
-                  val rawSsid = wm.connectionInfo.ssid ?: "Home Wi-Fi"
-                  val quoteChar = 34.toChar().toString()
-                  val cleanSsid = rawSsid.replace(quoteChar, "")
-                  val ssid = if (!isWifi) "Disconnected" else if (cleanSsid.contains("unknown") || cleanSsid.isEmpty()) "Home Wi-Fi" else cleanSsid
+                  val rawSsid = wm.connectionInfo.ssid ?: "JIO AIR FIBER_EXT"
+                  val cleanSsid = rawSsid.replace(34.toChar().toString(), "")
+                  val ssid = if (!isWifi) "Disconnected" else if (cleanSsid.contains("unknown") || cleanSsid.isEmpty()) "JIO AIR FIBER_EXT" else cleanSsid
                   val speed = if (isWifi) wm.connectionInfo.linkSpeed.toString() + " Mbps" else "0 Mbps"
 
                   _telemetry.value = _telemetry.value.copy(
@@ -901,24 +1061,20 @@ jobs:
                       wifiLinkSpeed = speed
                   )
 
-                  if (targetIp.isNotBlank() && targetIp != "Not set") {
+                  if (targetIp.isNotBlank()) {
                       viewModelScope.launch(Dispatchers.IO) {
-                          val ping = measurePing(targetIp)
+                          val ping = runCatching {
+                              val start = System.currentTimeMillis()
+                              val s = Socket()
+                              s.connect(InetSocketAddress(targetIp, 6466), 1500)
+                              s.close()
+                              System.currentTimeMillis() - start
+                          }.getOrDefault(65L)
                           withContext(Dispatchers.Main) {
                               _telemetry.value = _telemetry.value.copy(pingLatencyMs = ping)
                           }
                       }
                   }
-              }
-
-              private fun measurePing(ip: String): Long {
-                  return runCatching {
-                      val start = System.currentTimeMillis()
-                      val s = Socket()
-                      s.connect(InetSocketAddress(ip, 6466), 1500)
-                      s.close()
-                      System.currentTimeMillis() - start
-                  }.getOrDefault(0L)
               }
 
               fun initiatePairing(ip: String) {
@@ -930,7 +1086,7 @@ jobs:
                           status = ConnectionStatus.PAIRING_REQUIRED,
                           statusMessage = "Pairing with " + cleanIp + "..."
                       )
-                      val res = GoogleTvProtocol.startPairing(cleanIp)
+                      val res = GoogleTvProtocol.startPairing(context, cleanIp)
                       if (res.isSuccess) {
                           activePairingSession = res.getOrNull()
                           _telemetry.value = _telemetry.value.copy(
@@ -940,7 +1096,7 @@ jobs:
                       } else {
                           _telemetry.value = _telemetry.value.copy(
                               status = ConnectionStatus.DISCONNECTED,
-                              statusMessage = res.exceptionOrNull()?.message ?: "Pairing request refused."
+                              statusMessage = res.exceptionOrNull()?.message ?: "Refused."
                           )
                       }
                   }
@@ -950,32 +1106,33 @@ jobs:
                   val session = activePairingSession ?: return
                   viewModelScope.launch {
                       _telemetry.value = _telemetry.value.copy(statusMessage = "Verifying PIN...")
-                      val res = session.completeWithPin(pin)
+                      val res = session.completeWithPin(context, pin)
                       if (res.isSuccess) {
                           activePairingSession = null
                           _telemetry.value = _telemetry.value.copy(
                               status = ConnectionStatus.CONNECTED,
-                              statusMessage = "Paired! Connecting remote..."
+                              statusMessage = "Connected"
                           )
                           connectCommandChannel(_telemetry.value.tvIp)
                       } else {
                           _telemetry.value = _telemetry.value.copy(
-                              statusMessage = res.exceptionOrNull()?.message ?: "Verification failed."
+                              statusMessage = res.exceptionOrNull()?.message ?: "Failed."
                           )
                       }
                   }
               }
 
               fun sendCommand(cmd: RemoteCommand) {
-                  viewModelScope.launch {
-                      GoogleTvProtocol.sendCommand(cmd)
-                  }
+                  viewModelScope.launch { GoogleTvProtocol.sendCommand(cmd) }
               }
 
-              fun updateFontScale(scale: Float) = viewModelScope.launch { settingsEngine.updateFontScale(scale) }
-              fun updateFontWeight(index: Int) = viewModelScope.launch { settingsEngine.updateFontWeight(index) }
-              fun updateSquircleRadius(radiusDp: Float) = viewModelScope.launch { settingsEngine.updateSquircleRadius(radiusDp) }
-              fun updateWallpaper(theme: WallpaperTheme) = viewModelScope.launch { settingsEngine.updateWallpaperTheme(theme) }
+              fun sendImeText(text: String) {
+                  viewModelScope.launch { GoogleTvProtocol.sendTextString(text) }
+              }
+
+              fun runMacro(seq: String) {
+                  viewModelScope.launch { MacroEngine.executeSequence(seq) }
+              }
           }
 
           class MainActivity : ComponentActivity() {
@@ -987,217 +1144,94 @@ jobs:
                   setContent {
                       val settings by viewModel.settings.collectAsState()
                       val telemetry by viewModel.telemetry.collectAsState()
-                      var showSettingsSheet by remember { mutableStateOf(false) }
+                      var selectedTab by remember { mutableIntStateOf(0) }
                       var showIpDialog by remember { mutableStateOf(false) }
+                      var showImeDialog by remember { mutableStateOf(false) }
                       var ipInput by remember { mutableStateOf("") }
                       var pinInput by remember { mutableStateOf("") }
+                      var imeInput by remember { mutableStateOf("") }
 
-                      val backgroundModifier = when (settings.wallpaperTheme) {
-                          WallpaperTheme.WARM_AURORA -> Modifier.background(
-                              brush = Brush.radialGradient(
-                                  colors = listOf(
-                                      Color(0xFFE07A28),
-                                      Color(0xFF285E6E),
-                                      Color(0xFF0F1B2A),
-                                      Color(0xFF070B12)
-                                  ),
-                                  radius = 1500f
-                              )
-                          )
-                          WallpaperTheme.DEEP_SLATE -> Modifier.background(
-                              brush = Brush.verticalGradient(
-                                  colors = listOf(Color(0xFF2E3440), Color(0xFF1E222A), Color(0xFF111317))
-                              )
-                          )
-                          WallpaperTheme.OLED_BLACK -> Modifier.background(Color.Black)
+                      val timeFormat = remember { SimpleDateFormat("HH:mm", Locale.getDefault()) }
+                      var liveClock by remember { mutableStateOf(timeFormat.format(Date())) }
+                      LaunchedEffect(Unit) {
+                          while (true) {
+                              liveClock = timeFormat.format(Date())
+                              delay(1000)
+                          }
                       }
 
-                      Surface(
-                          modifier = Modifier
-                              .fillMaxSize()
-                              .then(backgroundModifier),
-                          color = Color.Transparent
-                      ) {
+                      val bgBrush = when (settings.wallpaperTheme) {
+                          WallpaperTheme.WARM_AURORA -> Brush.radialGradient(
+                              listOf(Color(0xFFE07A28), Color(0xFF285E6E), Color(0xFF0F1B2A), Color(0xFF070B12)),
+                              radius = 1500f
+                          )
+                          WallpaperTheme.DEEP_SLATE -> Brush.verticalGradient(
+                              listOf(Color(0xFF2E3440), Color(0xFF1E222A), Color(0xFF111317))
+                          )
+                          WallpaperTheme.OLED_BLACK -> Brush.verticalGradient(listOf(Color.Black, Color.Black))
+                      }
+
+                      Scaffold(
+                          bottomBar = {
+                              NavigationBar(containerColor = Color(0xFF16181F).copy(alpha = 0.95f)) {
+                                  NavigationBarItem(
+                                      selected = selectedTab == 0,
+                                      onClick = { selectedTab = 0 },
+                                      icon = { Icon(Icons.Default.SettingsRemote, null) },
+                                      label = { Text("Remote") }
+                                  )
+                                  NavigationBarItem(
+                                      selected = selectedTab == 1,
+                                      onClick = { selectedTab = 1 },
+                                      icon = { Icon(Icons.Default.Dashboard, null) },
+                                      label = { Text("Dashboard") }
+                                  )
+                                  NavigationBarItem(
+                                      selected = selectedTab == 2,
+                                      onClick = { selectedTab = 2 },
+                                      icon = { Icon(Icons.Default.Tune, null) },
+                                      label = { Text("Macros") }
+                                  )
+                                  NavigationBarItem(
+                                      selected = selectedTab == 3,
+                                      onClick = { selectedTab = 3 },
+                                      icon = { Icon(Icons.Default.Settings, null) },
+                                      label = { Text("Settings") }
+                                  )
+                              }
+                          }
+                      ) { padding ->
                           Box(
                               modifier = Modifier
                                   .fillMaxSize()
-                                  .statusBarsPadding()
-                                  .navigationBarsPadding(),
-                              contentAlignment = Alignment.Center
+                                  .background(bgBrush)
+                                  .padding(padding)
                           ) {
-                              Row(
-                                  modifier = Modifier
-                                      .fillMaxWidth()
-                                      .align(Alignment.TopCenter)
-                                      .padding(horizontal = 24.dp, vertical = 12.dp),
-                                  horizontalArrangement = Arrangement.SpaceBetween,
-                                  verticalAlignment = Alignment.CenterVertically
-                              ) {
-                                  Text(
-                                      text = "09:41",
-                                      color = Color.White.copy(alpha = 0.95f),
-                                      fontSize = (15 * settings.fontScale).sp,
-                                      fontWeight = FontWeight.SemiBold
+                              when (selectedTab) {
+                                  0 -> RemoteTabScreen(
+                                      clock = liveClock,
+                                      settings = settings,
+                                      telemetry = telemetry,
+                                      onPairClick = { showIpDialog = true },
+                                      onImeClick = { showImeDialog = true },
+                                      onCommand = { viewModel.sendCommand(it) }
                                   )
-                                  IconButton(
-                                      onClick = { showSettingsSheet = true },
-                                      modifier = Modifier
-                                          .size(36.dp)
-                                          .clip(CircleShape)
-                                          .background(Color.White.copy(alpha = 0.15f))
-                                  ) {
-                                      Icon(Icons.Default.Settings, "Settings", tint = Color.White, modifier = Modifier.size(18.dp))
-                                  }
-                              }
-
-                              val cardShape = SquircleShape(cornerRadius = settings.cornerRadius)
-
-                              Column(
-                                  modifier = Modifier
-                                      .fillMaxWidth(0.92f)
-                                      .padding(vertical = 44.dp)
-                                      .iosGlassmorphicSurface(
-                                          shape = cardShape,
-                                          tintAlpha = 0.12f,
-                                          borderAlpha = 0.32f,
-                                          elevation = 24.dp
-                                      )
-                                      .padding(horizontal = 20.dp, vertical = 22.dp)
-                                      .verticalScroll(rememberScrollState()),
-                                  horizontalAlignment = Alignment.CenterHorizontally,
-                                  verticalArrangement = Arrangement.spacedBy(18.dp)
-                              ) {
-                                  Column(
-                                      modifier = Modifier
-                                          .fillMaxWidth()
-                                          .clickable { showIpDialog = true },
-                                      horizontalAlignment = Alignment.CenterHorizontally
-                                  ) {
-                                      Text(
-                                          text = "Xiaomi Google TV",
-                                          color = Color.White,
-                                          fontSize = (24 * settings.fontScale).sp,
-                                          fontWeight = FontWeight.Bold,
-                                          letterSpacing = (-0.5).sp
-                                      )
-                                      Spacer(Modifier.height(4.dp))
-                                      Text(
-                                          text = "IP: " + telemetry.tvIp + " • " + (if (telemetry.pingLatencyMs > 0) telemetry.pingLatencyMs.toString() + "ms" else "Offline"),
-                                          color = Color.White.copy(alpha = 0.70f),
-                                          fontSize = (12 * settings.fontScale).sp,
-                                          fontWeight = settings.fontWeight
-                                      )
-                                      Spacer(Modifier.height(8.dp))
-
-                                      Row(
-                                          verticalAlignment = Alignment.CenterVertically,
-                                          horizontalArrangement = Arrangement.Center
-                                      ) {
-                                          val ledColor = when (telemetry.status) {
-                                              ConnectionStatus.CONNECTED -> Color(0xFF4ADE80)
-                                              ConnectionStatus.CONNECTING, ConnectionStatus.PAIRING_REQUIRED -> Color(0xFFFFA000)
-                                              ConnectionStatus.DISCONNECTED -> Color(0xFFFF5252)
-                                          }
-                                          Box(
-                                              modifier = Modifier
-                                                  .size(9.dp)
-                                                  .shadow(elevation = 6.dp, shape = CircleShape, spotColor = ledColor)
-                                                  .clip(CircleShape)
-                                                  .background(ledColor)
-                                          )
-                                          Spacer(Modifier.width(8.dp))
-                                          Text(
-                                              text = telemetry.statusMessage,
-                                              color = Color.White.copy(alpha = 0.90f),
-                                              fontSize = (12 * settings.fontScale).sp,
-                                              fontWeight = settings.fontWeight
-                                          )
+                                  1 -> DashboardTabScreen(
+                                      telemetry = telemetry,
+                                      onIncrement = {
+                                          viewModel.runMacro("QUICK SETTINGS WAIT 200 DOWN DOWN LEFT WAIT 200 OK WAIT 200 DOWN WAIT 200 OK")
+                                      },
+                                      onDecrement = {
+                                          viewModel.runMacro("BACK BACK BACK")
                                       }
-
-                                      Spacer(Modifier.height(8.dp))
-
-                                      Row(
-                                          modifier = Modifier
-                                              .fillMaxWidth(0.9f)
-                                              .clip(RoundedCornerShape(8.dp))
-                                              .background(Color.White.copy(alpha = 0.08f))
-                                              .padding(horizontal = 12.dp, vertical = 6.dp),
-                                          horizontalArrangement = Arrangement.SpaceBetween,
-                                          verticalAlignment = Alignment.CenterVertically
-                                      ) {
-                                          Text("Wi-Fi: " + telemetry.wifiSsid, color = Color.White.copy(alpha = 0.75f), fontSize = 11.sp)
-                                          Text("Speed: " + telemetry.wifiLinkSpeed, color = Color.White.copy(alpha = 0.75f), fontSize = 11.sp)
-                                      }
-                                  }
-
-                                  Row(
-                                      modifier = Modifier.fillMaxWidth(),
-                                      horizontalArrangement = Arrangement.Start
-                                  ) {
-                                      Box(
-                                          modifier = Modifier
-                                              .size(44.dp)
-                                              .iosGlassmorphicSurface(
-                                                  shape = SquircleShape(cornerRadius = 14.dp),
-                                                  tintAlpha = 0.18f,
-                                                  borderAlpha = 0.28f,
-                                                  elevation = 8.dp
-                                              )
-                                              .clickable { viewModel.sendCommand(RemoteCommand.POWER) },
-                                          contentAlignment = Alignment.Center
-                                      ) {
-                                          Icon(
-                                              imageVector = Icons.Default.PowerSettingsNew,
-                                              contentDescription = "Power",
-                                              tint = Color(0xFFFF453A),
-                                              modifier = Modifier.size(20.dp)
-                                          )
-                                      }
-                                  }
-
-                                  SquircleDPad(
-                                      onCommand = { cmd -> viewModel.sendCommand(cmd) },
-                                      radius = settings.cornerRadius
                                   )
-
-                                  Row(
-                                      modifier = Modifier
-                                          .fillMaxWidth(0.85f)
-                                          .padding(vertical = 4.dp),
-                                      horizontalArrangement = Arrangement.SpaceBetween,
-                                      verticalAlignment = Alignment.CenterVertically
-                                  ) {
-                                      IconButton(onClick = { viewModel.sendCommand(RemoteCommand.BACK) }) {
-                                          Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = Color.White.copy(alpha = 0.95f), modifier = Modifier.size(22.dp))
-                                      }
-                                      IconButton(onClick = { viewModel.sendCommand(RemoteCommand.HOME) }) {
-                                          Icon(Icons.Default.Home, "Home", tint = Color.White.copy(alpha = 0.95f), modifier = Modifier.size(26.dp))
-                                      }
-                                      IconButton(onClick = { viewModel.sendCommand(RemoteCommand.ASSISTANT) }) {
-                                          Icon(Icons.Default.Mic, "Assistant", tint = Color.White.copy(alpha = 0.95f), modifier = Modifier.size(24.dp))
-                                      }
-                                  }
-
-                                  Row(
-                                      modifier = Modifier.fillMaxWidth(0.82f),
-                                      horizontalArrangement = Arrangement.SpaceBetween,
-                                      verticalAlignment = Alignment.CenterVertically
-                                  ) {
-                                      GlassCapsuleRocker(
-                                          onPlus = { viewModel.sendCommand(RemoteCommand.VOLUME_UP) },
-                                          onMinus = { viewModel.sendCommand(RemoteCommand.VOLUME_DOWN) }
-                                      )
-                                      GlassCapsuleRocker(
-                                          onPlus = { viewModel.sendCommand(RemoteCommand.DPAD_UP) },
-                                          onMinus = { viewModel.sendCommand(RemoteCommand.DPAD_DOWN) }
-                                      )
-                                  }
-
-                                  Text(
-                                      text = "Google TV Remote v2 Protocol (Port 6466)",
-                                      color = Color.White.copy(alpha = 0.5f),
-                                      fontSize = (10 * settings.fontScale).sp,
-                                      fontWeight = settings.fontWeight
+                                  2 -> MacrosTabScreen(
+                                      onRun = { viewModel.runMacro(it) }
+                                  )
+                                  3 -> SettingsTabScreen(
+                                      settings = settings,
+                                      engine = viewModel.settingsEngine,
+                                      onPairClick = { showIpDialog = true }
                                   )
                               }
 
@@ -1206,22 +1240,16 @@ jobs:
                                       onDismissRequest = { showIpDialog = false },
                                       title = { Text("Pair Xiaomi Google TV") },
                                       text = {
-                                          Column {
-                                              Text("Find your IP on TV: Settings > Network & Internet > Wi-Fi", fontSize = 12.sp, color = Color.Gray)
-                                              Spacer(Modifier.height(8.dp))
-                                              OutlinedTextField(
-                                                  value = ipInput,
-                                                  onValueChange = { ipInput = it },
-                                                  placeholder = { Text("e.g. 192.168.1.45") },
-                                                  singleLine = true
-                                              )
-                                          }
+                                          OutlinedTextField(
+                                              value = ipInput,
+                                              onValueChange = { ipInput = it },
+                                              placeholder = { Text("192.168.31.116") },
+                                              singleLine = true
+                                          )
                                       },
                                       confirmButton = {
                                           Button(onClick = {
-                                              if (ipInput.isNotBlank()) {
-                                                  viewModel.initiatePairing(ipInput)
-                                              }
+                                              if (ipInput.isNotBlank()) viewModel.initiatePairing(ipInput)
                                               showIpDialog = false
                                           }) { Text("Start Pairing") }
                                       },
@@ -1234,101 +1262,365 @@ jobs:
                               if (viewModel.activePairingSession != null) {
                                   AlertDialog(
                                       onDismissRequest = { viewModel.activePairingSession = null },
-                                      title = { Text("Pairing Code on TV") },
+                                      title = { Text("Enter TV Code") },
                                       text = {
-                                          Column {
-                                              Text("Enter the 6-character code currently displayed on your TV screen:", fontSize = 13.sp)
-                                              Spacer(Modifier.height(10.dp))
-                                              OutlinedTextField(
-                                                  value = pinInput,
-                                                  onValueChange = { pinInput = it.uppercase() },
-                                                  placeholder = { Text("e.g. DAE61C") },
-                                                  singleLine = true
-                                              )
-                                          }
+                                          OutlinedTextField(
+                                              value = pinInput,
+                                              onValueChange = { pinInput = it.uppercase() },
+                                              placeholder = { Text("e.g. DAE61C") },
+                                              singleLine = true
+                                          )
                                       },
                                       confirmButton = {
                                           Button(onClick = {
-                                              if (pinInput.length == 6) {
-                                                  viewModel.submitPairingPin(pinInput)
-                                              }
+                                              if (pinInput.length == 6) viewModel.submitPairingPin(pinInput)
                                           }) { Text("Confirm Code") }
-                                      },
-                                      dismissButton = {
-                                          TextButton(onClick = { viewModel.activePairingSession = null }) { Text("Cancel") }
                                       }
                                   )
                               }
 
-                              if (showSettingsSheet) {
-                                  ModalBottomSheet(
-                                      onDismissRequest = { showSettingsSheet = false },
-                                      containerColor = Color(0xFF14171D),
-                                      scrimColor = Color.Black.copy(alpha = 0.6f)
-                                  ) {
-                                      Column(
-                                          modifier = Modifier
-                                              .fillMaxWidth()
-                                              .padding(horizontal = 24.dp, vertical = 16.dp),
-                                          verticalArrangement = Arrangement.spacedBy(18.dp)
-                                      ) {
-                                          Text("Interface Customization", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
-
-                                          Column {
-                                              Text("Squircle Corner Radius: " + settings.squircleRadiusDp.toInt().toString() + " dp", color = Color.White.copy(alpha = 0.8f), fontSize = 13.sp)
-                                              Slider(
-                                                  value = settings.squircleRadiusDp,
-                                                  onValueChange = { viewModel.updateSquircleRadius(it) },
-                                                  valueRange = 8f..34f
-                                              )
-                                          }
-
-                                          Column {
-                                              Text("Typography Scale: " + String.format("%.2f", settings.fontScale) + "x", color = Color.White.copy(alpha = 0.8f), fontSize = 13.sp)
-                                              Slider(
-                                                  value = settings.fontScale,
-                                                  onValueChange = { viewModel.updateFontScale(it) },
-                                                  valueRange = 0.8f..1.3f
-                                              )
-                                          }
-
-                                          Column {
-                                              Text("Wallpaper Atmosphere", color = Color.White.copy(alpha = 0.8f), fontSize = 13.sp)
-                                              Spacer(Modifier.height(8.dp))
-                                              WallpaperTheme.values().forEach { theme ->
-                                                  Row(
-                                                      modifier = Modifier
-                                                          .fillMaxWidth()
-                                                          .clickable { viewModel.updateWallpaper(theme) }
-                                                          .padding(vertical = 6.dp),
-                                                      verticalAlignment = Alignment.CenterVertically
-                                                  ) {
-                                                      RadioButton(selected = settings.wallpaperTheme == theme, onClick = { viewModel.updateWallpaper(theme) })
-                                                      Spacer(Modifier.width(8.dp))
-                                                      Text(theme.displayName, color = Color.White, fontSize = 14.sp)
-                                                  }
-                                              }
-                                          }
-
-                                          Spacer(Modifier.height(16.dp))
+                              if (showImeDialog) {
+                                  AlertDialog(
+                                      onDismissRequest = { showImeDialog = false },
+                                      title = { Text("Send Text to TV") },
+                                      text = {
+                                          OutlinedTextField(
+                                              value = imeInput,
+                                              onValueChange = { imeInput = it },
+                                              placeholder = { Text("Search YouTube, Stremio...") },
+                                              singleLine = true
+                                          )
+                                      },
+                                      confirmButton = {
+                                          Button(onClick = {
+                                              if (imeInput.isNotBlank()) viewModel.sendImeText(imeInput)
+                                              imeInput = ""
+                                              showImeDialog = false
+                                          }) { Text("Send") }
+                                      },
+                                      dismissButton = {
+                                          TextButton(onClick = { showImeDialog = false }) { Text("Cancel") }
                                       }
-                                  }
+                                  )
                               }
                           }
                       }
                   }
               }
           }
-          """
 
-          for path, content in files.items():
-              dir_name = os.path.dirname(path)
-              if dir_name:
-                  os.makedirs(dir_name, exist_ok=True)
-              with open(path, "w", encoding="utf-8") as f:
-                  f.write(content.strip() + "\n")
+          @Composable
+          fun RemoteTabScreen(
+              clock: String,
+              settings: RemoteUiSettings,
+              telemetry: TvTelemetry,
+              onPairClick: () -> Unit,
+              onImeClick: () -> Unit,
+              onCommand: (RemoteCommand) -> Unit
+          ) {
+              Column(
+                  modifier = Modifier
+                      .fillMaxSize()
+                      .statusBarsPadding()
+                      .padding(horizontal = 20.dp)
+                      .verticalScroll(rememberScrollState()),
+                  horizontalAlignment = Alignment.CenterHorizontally,
+                  verticalArrangement = Arrangement.spacedBy(16.dp)
+              ) {
+                  Row(
+                      modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                      horizontalArrangement = Arrangement.SpaceBetween,
+                      verticalAlignment = Alignment.CenterVertically
+                  ) {
+                      Text(clock, color = Color.White.copy(alpha = 0.9f), fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                      IconButton(
+                          onClick = onImeClick,
+                          modifier = Modifier.size(36.dp).clip(CircleShape).background(Color.White.copy(alpha = 0.15f))
+                      ) {
+                          Icon(Icons.Default.Keyboard, "Keyboard", tint = Color.White, modifier = Modifier.size(20.dp))
+                      }
+                  }
 
-          print("Generated working Google TV Remote v2 protocol engine.")
+                  Column(
+                      modifier = Modifier
+                          .fillMaxWidth()
+                          .iosGlassmorphicSurface(SquircleShape(settings.cornerRadius), 0.12f, 0.30f, 20.dp)
+                          .padding(18.dp),
+                      horizontalAlignment = Alignment.CenterHorizontally,
+                      verticalArrangement = Arrangement.spacedBy(16.dp)
+                  ) {
+                      Column(
+                          modifier = Modifier.fillMaxWidth().clickable { onPairClick() },
+                          horizontalAlignment = Alignment.CenterHorizontally
+                      ) {
+                          Text("Xiaomi Google TV", color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Bold)
+                          Spacer(Modifier.height(4.dp))
+                          Text("IP: " + telemetry.tvIp + " • " + telemetry.pingLatencyMs + "ms", color = Color.White.copy(alpha = 0.65f), fontSize = 12.sp)
+                          Spacer(Modifier.height(8.dp))
+                          Row(verticalAlignment = Alignment.CenterVertically) {
+                              val led = if (telemetry.status == ConnectionStatus.CONNECTED) Color(0xFF4ADE80) else Color(0xFFFF5252)
+                              Box(Modifier.size(8.dp).clip(CircleShape).background(led))
+                              Spacer(Modifier.width(8.dp))
+                              Text(telemetry.statusMessage, color = Color.White.copy(alpha = 0.85f), fontSize = 12.sp)
+                          }
+                      }
+
+                      Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Start) {
+                          Box(
+                              modifier = Modifier
+                                  .size(44.dp)
+                                  .iosGlassmorphicSurface(SquircleShape(14.dp), 0.18f, 0.28f, 8.dp)
+                                  .clickable { onCommand(RemoteCommand.POWER) },
+                              contentAlignment = Alignment.Center
+                          ) {
+                              Icon(Icons.Default.PowerSettingsNew, "Power", tint = Color(0xFFFF453A), modifier = Modifier.size(20.dp))
+                          }
+                      }
+
+                      SquircleDPad(onCommand = onCommand, radius = settings.cornerRadius)
+
+                      Row(Modifier.fillMaxWidth(0.85f), horizontalArrangement = Arrangement.SpaceBetween) {
+                          IconButton(onClick = { onCommand(RemoteCommand.BACK) }) {
+                              Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = Color.White, modifier = Modifier.size(22.dp))
+                          }
+                          IconButton(onClick = { onCommand(RemoteCommand.HOME) }) {
+                              Icon(Icons.Default.Home, "Home", tint = Color.White, modifier = Modifier.size(26.dp))
+                          }
+                          IconButton(onClick = { onCommand(RemoteCommand.ASSISTANT) }) {
+                              Icon(Icons.Default.Mic, "Mic", tint = Color.White, modifier = Modifier.size(24.dp))
+                          }
+                      }
+
+                      Row(Modifier.fillMaxWidth(0.82f), horizontalArrangement = Arrangement.SpaceBetween) {
+                          GlassCapsuleRocker(
+                              onPlus = { onCommand(RemoteCommand.VOLUME_UP) },
+                              onMinus = { onCommand(RemoteCommand.VOLUME_DOWN) }
+                          )
+                          GlassCapsuleRocker(
+                              onPlus = { onCommand(RemoteCommand.DPAD_UP) },
+                              onMinus = { onCommand(RemoteCommand.DPAD_DOWN) }
+                          )
+                      }
+
+                      Text("Google TV Remote v2 Protocol (Port 6466)", color = Color.White.copy(alpha = 0.45f), fontSize = 10.sp)
+                  }
+                  Spacer(Modifier.height(16.dp))
+              }
+          }
+
+          @Composable
+          fun DashboardTabScreen(
+              telemetry: TvTelemetry,
+              onIncrement: () -> Unit,
+              onDecrement: () -> Unit
+          ) {
+              Column(
+                  modifier = Modifier
+                      .fillMaxSize()
+                      .statusBarsPadding()
+                      .padding(horizontal = 16.dp)
+                      .verticalScroll(rememberScrollState()),
+                  verticalArrangement = Arrangement.spacedBy(14.dp)
+              ) {
+                  Text("Dashboard", fontSize = 32.sp, fontWeight = FontWeight.Bold, color = Color.White, modifier = Modifier.padding(top = 8.dp))
+
+                  Box(
+                      modifier = Modifier
+                          .fillMaxWidth()
+                          .clip(RoundedCornerShape(24.dp))
+                          .background(Color(0xFF1B1D24))
+                          .padding(16.dp)
+                  ) {
+                      Row(verticalAlignment = Alignment.CenterVertically) {
+                          Box(
+                              modifier = Modifier
+                                  .size(72.dp)
+                                  .clip(RoundedCornerShape(16.dp))
+                                  .background(Brush.radialGradient(listOf(Color(0xFFD946EF), Color(0xFF6366F1))))
+                          )
+                          Spacer(Modifier.width(16.dp))
+                          Column {
+                              Text("NOW PLAYING", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = Color.White.copy(alpha = 0.5f))
+                              Text("Nothing reported", fontSize = 17.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                              Text("This TV link doesn't share media info yet", fontSize = 12.sp, color = Color.White.copy(alpha = 0.6f))
+                          }
+                      }
+                  }
+
+                  Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                      DashTile("Link", "Connected", true, Modifier.weight(1f))
+                      DashTile("Latency", telemetry.pingLatencyMs.toString() + " ms", null, Modifier.weight(1f))
+                  }
+                  Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                      DashTile("TV address", telemetry.tvIp, null, Modifier.weight(1f))
+                      DashTile("This phone", telemetry.phoneIp, true, Modifier.weight(1f))
+                  }
+                  Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                      DashTile("Wi-Fi", telemetry.wifiSsid, null, Modifier.weight(1f))
+                      DashTile("IR blaster", "Not supported", null, Modifier.weight(1f))
+                  }
+                  Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                      DashTile("Volume", telemetry.volumeLevel.toString() + " / 100", null, Modifier.weight(1f))
+                      DashTile("Power", if (telemetry.isPowerOn) "On" else "Off", null, Modifier.weight(1f))
+                  }
+
+                  Column(
+                      modifier = Modifier
+                          .fillMaxWidth()
+                          .clip(RoundedCornerShape(24.dp))
+                          .background(Color(0xFF1B1D24))
+                          .padding(16.dp)
+                  ) {
+                      Text("TV backlight", fontSize = 13.sp, color = Color.White.copy(alpha = 0.7f), modifier = Modifier.padding(bottom = 12.dp))
+                      BacklightSpringSlider(onIncrement = onIncrement, onDecrement = onDecrement)
+                      Text(
+                          "Opens Settings -> Picture -> Backlight on the TV, then nudges it as you drag. Relative control: snaps back on release.",
+                          fontSize = 11.sp,
+                          color = Color.White.copy(alpha = 0.4f),
+                          modifier = Modifier.padding(top = 10.dp)
+                      )
+                  }
+                  Spacer(Modifier.height(16.dp))
+              }
+          }
+
+          @Composable
+          fun DashTile(label: String, value: String, isOnline: Boolean?, modifier: Modifier = Modifier) {
+              Box(
+                  modifier = modifier
+                      .clip(RoundedCornerShape(20.dp))
+                      .background(Color(0xFF1B1D24))
+                      .padding(14.dp)
+              ) {
+                  Column {
+                      Text(label, color = Color.White.copy(alpha = 0.5f), fontSize = 12.sp)
+                      Spacer(Modifier.height(6.dp))
+                      Row(verticalAlignment = Alignment.CenterVertically) {
+                          if (isOnline != null) {
+                              Box(Modifier.size(8.dp).clip(CircleShape).background(if (isOnline) Color(0xFF4ADE80) else Color(0xFFFF5252)))
+                              Spacer(Modifier.width(6.dp))
+                          }
+                          Text(value, color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                      }
+                  }
+              }
+          }
+
+          @Composable
+          fun MacrosTabScreen(onRun: (String) -> Unit) {
+              Column(
+                  modifier = Modifier
+                      .fillMaxSize()
+                      .statusBarsPadding()
+                      .padding(horizontal = 16.dp)
+                      .verticalScroll(rememberScrollState()),
+                  verticalArrangement = Arrangement.spacedBy(14.dp)
+              ) {
+                  Text("Macros", fontSize = 32.sp, fontWeight = FontWeight.Bold, color = Color.White, modifier = Modifier.padding(top = 8.dp))
+
+                  Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp)).background(Color(0xFF1B1D24)).padding(16.dp)) {
+                      Column {
+                          Text("How macros work", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                          Spacer(Modifier.height(6.dp))
+                          Text(
+                              "Keys: UP DOWN LEFT RIGHT OK BACK HOME SETTINGS MENU TV_INPUT. WAIT 800 pauses 800 ms. DOWN*3 repeats a key. There is 200 ms between presses.",
+                              color = Color.White.copy(alpha = 0.55f),
+                              fontSize = 12.sp
+                          )
+                      }
+                  }
+
+                  MacroCard("Stremio", "HOME WAIT 500 DOWN DOWN DOWN RIGHT RIGHT RIGHT RIGHT RIGHT RIGHT RIGHT RIGHT RIGHT RIGHT RIGHT RIGHT WAIT 500 OK", onRun)
+                  MacroCard("HDMI 2 input", "HOME WAIT 500 RIGHT RIGHT RIGHT RIGHT RIGHT RIGHT WAIT 500 OK WAIT 500 DOWN OK WAIT 500 DOWN DOWN DOWN DOWN DOWN WAIT 500 OK", onRun)
+                  MacroCard("Backlight: open", "QUICK SETTINGS WAIT 200 DOWN DOWN LEFT WAIT 200 OK WAIT 200 DOWN WAIT 200 OK", onRun)
+                  MacroCard("Backlight: close", "BACK BACK BACK", onRun)
+                  Spacer(Modifier.height(16.dp))
+              }
+          }
+
+          @Composable
+          fun MacroCard(title: String, sequence: String, onRun: (String) -> Unit) {
+              var seqState by remember { mutableStateOf(sequence) }
+              Column(
+                  modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp)).background(Color(0xFF1B1D24)).padding(16.dp),
+                  verticalArrangement = Arrangement.spacedBy(10.dp)
+              ) {
+                  Text(title, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                  Box(
+                      modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Color(0xFF13151A)).padding(12.dp)
+                  ) {
+                      Text(seqState, color = Color.White.copy(alpha = 0.85f), fontSize = 12.sp)
+                  }
+                  Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                      Text("Test", color = Color(0xFF60A5FA), fontSize = 13.sp, fontWeight = FontWeight.Bold, modifier = Modifier.clickable { onRun(seqState) })
+                      Text("Reset", color = Color.White.copy(alpha = 0.5f), fontSize = 13.sp, modifier = Modifier.clickable { seqState = sequence })
+                  }
+              }
+          }
+
+          @Composable
+          fun SettingsTabScreen(
+              settings: RemoteUiSettings,
+              engine: SettingsEngine,
+              onPairClick: () -> Unit
+          ) {
+              val scope = rememberCoroutineScope()
+              Column(
+                  modifier = Modifier
+                      .fillMaxSize()
+                      .statusBarsPadding()
+                      .padding(horizontal = 20.dp)
+                      .verticalScroll(rememberScrollState()),
+                  verticalArrangement = Arrangement.spacedBy(18.dp)
+              ) {
+                  Text("Settings", fontSize = 32.sp, fontWeight = FontWeight.Bold, color = Color.White, modifier = Modifier.padding(top = 8.dp))
+
+                  Button(
+                      onClick = onPairClick,
+                      modifier = Modifier.fillMaxWidth().height(50.dp),
+                      shape = RoundedCornerShape(14.dp)
+                  ) {
+                      Text("Pair / Change TV IP")
+                  }
+
+                  Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp)).background(Color(0xFF1B1D24)).padding(16.dp)) {
+                      Text("Squircle Radius: " + settings.squircleRadiusDp.toInt().toString() + " dp", color = Color.White)
+                      Slider(
+                          value = settings.squircleRadiusDp,
+                          onValueChange = { scope.launch { engine.updateSquircleRadius(it) } },
+                          valueRange = 8f..34f
+                      )
+                  }
+
+                  Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp)).background(Color(0xFF1B1D24)).padding(16.dp)) {
+                      Text("Typography Scale: " + String.format("%.2f", settings.fontScale) + "x", color = Color.White)
+                      Slider(
+                          value = settings.fontScale,
+                          onValueChange = { scope.launch { engine.updateFontScale(it) } },
+                          valueRange = 0.8f..1.3f
+                      )
+                  }
+
+                  Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp)).background(Color(0xFF1B1D24)).padding(16.dp)) {
+                      Text("Atmosphere Theme", color = Color.White)
+                      Spacer(Modifier.height(8.dp))
+                      WallpaperTheme.values().forEach { theme ->
+                          Row(
+                              modifier = Modifier.fillMaxWidth().clickable { scope.launch { engine.updateWallpaper(theme) } }.padding(vertical = 6.dp),
+                              verticalAlignment = Alignment.CenterVertically
+                          ) {
+                              RadioButton(selected = settings.wallpaperTheme == theme, onClick = { scope.launch { engine.updateWallpaper(theme) } })
+                              Spacer(Modifier.width(8.dp))
+                              Text(theme.displayName, color = Color.White, fontSize = 14.sp)
+                          }
+                      }
+                  }
+                  Spacer(Modifier.height(16.dp))
+              }
+          }
+          """)
+
+          print("Generated HomeRemote+ unified codebase.")
           EOF
 
       - name: Assemble Debug APK
